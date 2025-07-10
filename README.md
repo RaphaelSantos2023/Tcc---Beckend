@@ -11,4 +11,4 @@ pip install flask mysql-connector-python passlib pyjwt flask-cors
 Tem que:
 - Baixar node.js
 - ir, pelo terminal, ao diretorio da pasta meu-primeiro-projeto-react
-- digitar *npm start*
+- digite *npm start* no terminal
