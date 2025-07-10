@@ -1,0 +1,209 @@
+from flask import Flask, request, jsonify
+import mysql.connector
+from passlib.hash import bcrypt
+import jwt
+import datetime
+from functools import wraps
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+app.config['SECRET_KEY'] = 'sua_chave_super_secreta'  # Troque para algo seguro
+
+db_config = {
+    'host': 'localhost',
+    'user': 'root',
+    'password': 'root',
+    'database': 'tcc_bd'
+}
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            parts = request.headers['Authorization'].split()
+            if len(parts) == 2 and parts[0] == 'Bearer':
+                token = parts[1]
+
+        if not token:
+            return jsonify({'message': 'Token está faltando!'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user_id = data['id_usuario']
+
+            # Buscar tipo_usuario no banco para o usuário autenticado
+            conn = mysql.connector.connect(**db_config)
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT tipo_usuario FROM usuarios WHERE id_usuario = %s AND ativo = TRUE", (current_user_id,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({'message': 'Usuário não encontrado ou inativo.'}), 401
+
+            current_user_role = user['tipo_usuario']
+
+        except Exception as e:
+            return jsonify({'message': 'Token inválido ou expirado!', 'error': str(e)}), 401
+
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+        # Passa id e role para a função protegida
+        return f(current_user_id, current_user_role, *args, **kwargs)
+    return decorated
+
+def roles_required(*allowed_roles):
+    """
+    Decorator para limitar acesso a usuários com papeis específicos.
+    Uso:
+      @roles_required('admin', 'professor')
+      def sua_rota(current_user_id, current_user_role):
+          ...
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapper(current_user_id, current_user_role, *args, **kwargs):
+            if current_user_role not in allowed_roles:
+                return jsonify({'message': 'Permissão negada para seu nível de usuário.'}), 403
+            return f(current_user_id, current_user_role, *args, **kwargs)
+        return wrapper
+    return decorator
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+
+    required_fields = ['email', 'senha', 'nome_completo', 'curso_atual']
+    if not data or any(field not in data for field in required_fields):
+        return jsonify({'message': 'Campos obrigatórios faltando: email, senha, nome_completo, curso_atual'}), 400
+
+    email = data['email']
+    senha = data['senha']
+    nome_completo = data['nome_completo']
+    curso_atual = data['curso_atual']
+    genero = data.get('genero')
+    data_nascimento = data.get('data_nascimento')  # deve estar no formato YYYY-MM-DD
+    genero = data.get('genero')
+    data_nascimento = data.get('data_nascimento')
+    tipo_usuario = data.get('tipo_usuario', 'aluno')  # default aluno
+
+    senha_hash = bcrypt.hash(senha)
+
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id_usuario FROM usuarios WHERE email = %s", (email,))
+        if cursor.fetchone():
+            return jsonify({'message': 'Email já cadastrado'}), 409
+
+        sql = """INSERT INTO usuarios (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario) 
+                 VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+        cursor.execute(sql, (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario))
+        conn.commit()
+
+        return jsonify({'message': 'Usuário registrado com sucesso'}), 201
+
+    except mysql.connector.Error as err:
+        print("Erro MySQL:", err)  # ESSENCIAL! Mostra a exceção no terminal
+        return jsonify({'message': 'Erro no banco de dados', 'error': str(err)}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+
+    if not data or not data.get('email') or not data.get('senha'):
+        return jsonify({'message': 'Email e senha são obrigatórios'}), 400
+
+    email = data['email']
+    senha = data['senha']
+
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT id_usuario, senha_hash FROM usuarios WHERE email = %s AND ativo = TRUE", (email,))
+        user = cursor.fetchone()
+
+        if not user or not bcrypt.verify(senha, user['senha_hash']):
+            return jsonify({'message': 'Usuário ou senha incorretos'}), 401
+
+        token = jwt.encode({
+            'id_usuario': user['id_usuario'],
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=2)
+        }, app.config['SECRET_KEY'], algorithm="HS256")
+
+        return jsonify({'token': token})
+
+    except mysql.connector.Error as err:
+        return jsonify({'message': 'Erro no banco de dados', 'error': str(err)}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/admin-area', methods=['GET'])
+@token_required
+@roles_required('admin')
+def admin_area(current_user_id, current_user_role):
+    return jsonify({'message': f'Bem-vindo ao painel admin, usuário {current_user_id}!'})
+
+@app.route('/professor-area', methods=['GET'])
+@token_required
+@roles_required('admin', 'professor')
+def professor_area(current_user_id, current_user_role):
+    return jsonify({'message': f'Área de professores, usuário {current_user_id} com papel {current_user_role}.'})
+
+@app.route('/aluno-area', methods=['GET'])
+@token_required
+@roles_required('aluno', 'professor', 'admin')
+def aluno_area(current_user_id, current_user_role):
+    return jsonify({'message': f'Área de alunos para usuário {current_user_id}.'})
+
+@app.route('/logout', methods=['POST'])
+@token_required
+def logout(current_user_id, current_user_role):
+    # Logout básico (JWT stateless)
+    return jsonify({'message': 'Logout realizado com sucesso.'})
+
+@app.route('/alunos', methods=['GET'])
+@token_required
+@roles_required('admin', 'professor')  # Somente admins e professores podem acessar
+def listar_alunos(current_user_id, current_user_role):
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT id_usuario, nome_completo, email, curso_atual, data_nascimento, genero
+            FROM usuarios
+            WHERE tipo_usuario = 'aluno' AND ativo = TRUE
+        """)
+        alunos = cursor.fetchall()
+
+        return jsonify({'alunos': alunos})
+
+    except mysql.connector.Error as err:
+        print("Erro MySQL:", err)
+        return jsonify({'message': 'Erro ao buscar alunos', 'error': str(err)}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+if __name__ == '__main__':
+    app.run(debug=True)
