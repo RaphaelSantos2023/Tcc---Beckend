@@ -77,20 +77,21 @@ def roles_required(*allowed_roles):
 def register():
     data = request.get_json()
 
-    required_fields = ['email', 'senha', 'nome_completo', 'curso_atual']
-    if not data or any(field not in data for field in required_fields):
-        return jsonify({'message': 'Campos obrigatórios faltando: email, senha, nome_completo, curso_atual'}), 400
+    if not data:
+        return jsonify({'message': 'JSON ausente na requisição.'}), 400
+
+    required_fields = ['email', 'senha', 'nome_completo', 'tipo_usuario']
+    if any(field not in data for field in required_fields):
+        return jsonify({'message': 'Campos obrigatórios faltando'}), 400
 
     email = data['email']
     senha = data['senha']
     nome_completo = data['nome_completo']
-    curso_atual = data['curso_atual']
+    tipo_usuario = data.get('tipo_usuario', 'aluno').lower()
+    curso_atual = data.get('curso_atual')
     genero = data.get('genero')
-    data_nascimento = data.get('data_nascimento')  # deve estar no formato YYYY-MM-DD
-    genero = data.get('genero')
-    data_nascimento = data.get('data_nascimento')
-    tipo_usuario = data.get('tipo_usuario', 'aluno')  # default aluno
-
+    data_nascimento = data.get('data_nascimento')  # YYYY-MM-DD
+    
     senha_hash = bcrypt.hash(senha)
 
     try:
@@ -101,15 +102,86 @@ def register():
         if cursor.fetchone():
             return jsonify({'message': 'Email já cadastrado'}), 409
 
-        sql = """INSERT INTO usuarios (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario) 
-                 VALUES (%s, %s, %s, %s, %s, %s, %s)"""
-        cursor.execute(sql, (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario))
+        sql_user = """
+            INSERT INTO usuarios (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(sql_user, (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario))
         conn.commit()
+        id_usuario = cursor.lastrowid
 
-        return jsonify({'message': 'Usuário registrado com sucesso'}), 201
+        # Se for parceiro (empresa ou faculdade), criar registro na tabela parceiros
+        if tipo_usuario == 'parceiro':
+            tipo_parceiro = data.get('tipo_parceiro')  # 'empresa' ou 'faculdade'
+            nome_fantasia = data.get('nome_fantasia')
+            razao_social = data.get('razao_social')
+            cnpj = data.get('cnpj')
+
+            if not tipo_parceiro or tipo_parceiro not in ['empresa', 'faculdade']:
+                return jsonify({'message': 'Tipo de parceiro inválido ou ausente'}), 400
+
+            telefone = data.get('telefone')
+            site = data.get('site')
+            email_parceiro = data.get('email_parceiro', email)  # usa o mesmo email do usuário, se não enviado outro
+
+            sql_parceiro = """
+                INSERT INTO parceiros (
+                    id_usuario, tipo_parceiro, nome_fantasia, razao_social, cnpj,
+                    telefone, email, site
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(sql_parceiro, (
+                id_usuario,
+                tipo_parceiro,
+                nome_fantasia,
+                razao_social,
+                cnpj,
+                telefone,
+                email_parceiro,
+                site
+            ))
+
+            conn.commit()
+        # Se for professor, criar entrada na tabela dados_professor
+        if tipo_usuario == 'professor':
+            formacao = data.get('formacao')
+            area_atuacao = data.get('area_atuacao')
+            tempo_experiencia = data.get('tempo_experiencia')
+
+            sql_dados_prof = """
+                INSERT INTO dados_professor (id_usuario, formacao, area_atuacao, tempo_experiencia)
+                VALUES (%s, %s, %s, %s)
+            """
+            cursor.execute(sql_dados_prof, (id_usuario, formacao, area_atuacao, tempo_experiencia))
+            conn.commit()
+        
+        # Se veio endereço no JSON, salvar na tabela de endereços
+        endereco = data.get('endereco')
+        if endereco:
+            sql_endereco = """
+                INSERT INTO enderecos (
+                    id_usuario, cep, logradouro, numero, complemento,
+                    bairro, cidade, estado, pais, tipo_endereco
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(sql_endereco, (
+                id_usuario,
+                endereco.get('cep'),
+                endereco.get('logradouro'),
+                endereco.get('numero'),
+                endereco.get('complemento'),
+                endereco.get('bairro'),
+                endereco.get('cidade'),
+                endereco.get('estado'),
+                endereco.get('pais', 'Brasil'),
+                endereco.get('tipo_endereco', 'residencial')
+            ))
+            conn.commit()
+
+        return jsonify({'message': 'Usuário registrado com sucesso', 'id_usuario': id_usuario}), 201
 
     except mysql.connector.Error as err:
-        print("Erro MySQL:", err)  # ESSENCIAL! Mostra a exceção no terminal
+        print("Erro MySQL:", err)
         return jsonify({'message': 'Erro no banco de dados', 'error': str(err)}), 500
 
     finally:
@@ -204,6 +276,60 @@ def listar_alunos(current_user_id, current_user_role):
             cursor.close()
         if conn:
             conn.close()
+
+@app.route('/parceiros', methods=['GET'])
+@token_required
+@roles_required('admin', 'professor')
+def listar_parceiros(current_user_id, current_user_role):
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT p.id_parceiro, u.nome_completo AS responsavel, u.email, p.tipo_parceiro,
+                   p.nome_fantasia, p.razao_social, p.cnpj
+            FROM parceiros p
+            JOIN usuarios u ON p.id_usuario = u.id_usuario
+            WHERE u.ativo = TRUE
+        """)
+        parceiros = cursor.fetchall()
+        return jsonify({'parceiros': parceiros})
+
+    except mysql.connector.Error as err:
+        return jsonify({'message': 'Erro ao buscar parceiros', 'error': str(err)}), 500
+
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.route('/parceiro-area', methods=['GET'])
+@token_required
+@roles_required('parceiro', 'admin')
+def parceiro_area(current_user_id, current_user_role):
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        # Buscar os dados do parceiro
+        cursor.execute("""
+            SELECT p.id_parceiro, p.tipo_parceiro, p.nome_fantasia, p.razao_social, p.cnpj
+            FROM parceiros p
+            WHERE p.id_usuario = %s
+        """, (current_user_id,))
+        parceiro = cursor.fetchone()
+
+        if not parceiro:
+            return jsonify({'message': 'Parceiro não encontrado'}), 404
+
+        return jsonify({'message': f'Bem-vindo, parceiro!', 'parceiro': parceiro})
+
+    except mysql.connector.Error as err:
+        return jsonify({'message': 'Erro no painel do parceiro', 'error': str(err)}), 500
+
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
 
 if __name__ == '__main__':
     app.run(debug=True)
