@@ -330,6 +330,129 @@ def parceiro_area(current_user_id, current_user_role):
         if cursor: cursor.close()
         if conn: conn.close()
 
+@app.route('/forum/publicar', methods=['POST'])
+@token_required
+@roles_required('aluno', 'professor', 'admin')
+def publicar_post(current_user_id, current_user_role):
+    data = request.get_json()
+    titulo = data.get('titulo')
+    conteudo = data.get('conteudo')
+    categoria = data.get('categoria')
+
+    if not titulo or not conteudo:
+        return jsonify({'message': 'Título e conteúdo são obrigatórios.'}), 400
+
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO publicacoes_forum (id_usuario, titulo, conteudo, categoria)
+            VALUES (%s, %s, %s, %s)
+        """, (current_user_id, titulo, conteudo, categoria))
+        conn.commit()
+
+        return jsonify({'message': 'Publicação criada com sucesso!'}), 201
+
+    except mysql.connector.Error as err:
+        return jsonify({'message': 'Erro ao criar publicação.', 'error': str(err)}), 500
+
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.route('/forum/publicacoes', methods=['GET'])
+@token_required
+def listar_publicacoes(current_user_id, current_user_role):
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT p.id_publicacao, p.titulo, p.conteudo, p.categoria, p.data_criacao,
+                   u.nome_completo AS autor
+            FROM publicacoes_forum p
+            JOIN usuarios u ON p.id_usuario = u.id_usuario
+            ORDER BY p.data_criacao DESC
+        """)
+        posts = cursor.fetchall()
+        return jsonify({'publicacoes': posts})
+
+    except mysql.connector.Error as err:
+        return jsonify({'message': 'Erro ao buscar publicações.', 'error': str(err)}), 500
+
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.route('/forum/publicacoes/<int:id_publicacao>/responder', methods=['POST'])
+@token_required
+def responder_publicacao(current_user_id, current_user_role, id_publicacao):
+    data = request.get_json()
+    conteudo = data.get('conteudo')
+
+    if not conteudo:
+        return jsonify({'message': 'Conteúdo da resposta é obrigatório.'}), 400
+
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO respostas_forum (id_publicacao, id_usuario, conteudo)
+            VALUES (%s, %s, %s)
+        """, (id_publicacao, current_user_id, conteudo))
+        conn.commit()
+
+        return jsonify({'message': 'Resposta publicada com sucesso.'}), 201
+
+    except mysql.connector.Error as err:
+        return jsonify({'message': 'Erro ao salvar resposta.', 'error': str(err)}), 500
+
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.route('/forum/publicacoes/<int:id_publicacao>', methods=['GET'])
+@token_required
+def detalhes_publicacao(current_user_id, current_user_role, id_publicacao):
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        # Obter a publicação
+        cursor.execute("""
+            SELECT p.id_publicacao, p.titulo, p.conteudo, p.categoria, p.data_criacao,
+                   u.nome_completo AS autor
+            FROM publicacoes_forum p
+            JOIN usuarios u ON p.id_usuario = u.id_usuario
+            WHERE p.id_publicacao = %s
+        """, (id_publicacao,))
+        publicacao = cursor.fetchone()
+
+        if not publicacao:
+            return jsonify({'message': 'Publicação não encontrada.'}), 404
+
+        # Obter as respostas
+        cursor.execute("""
+            SELECT r.id_resposta, r.conteudo, r.data_criacao, u.nome_completo AS autor
+            FROM respostas_forum r
+            JOIN usuarios u ON r.id_usuario = u.id_usuario
+            WHERE r.id_publicacao = %s
+            ORDER BY r.data_criacao ASC
+        """, (id_publicacao,))
+        respostas = cursor.fetchall()
+
+        publicacao['respostas'] = respostas
+        return jsonify({'publicacao': publicacao})
+
+    except mysql.connector.Error as err:
+        return jsonify({'message': 'Erro ao buscar detalhes da publicação.', 'error': str(err)}), 500
+
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
 
 if __name__ == '__main__':
     app.run(debug=True)
