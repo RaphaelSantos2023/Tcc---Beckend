@@ -93,6 +93,7 @@ CREATE TABLE preferencias_recomendacao (
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
 );
 
+
 -- Tabela de publicações no fórum
 CREATE TABLE publicacoes_forum (
     id_publicacao INT AUTO_INCREMENT PRIMARY KEY,
@@ -116,3 +117,34 @@ CREATE TABLE respostas_forum (
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
 );
 
+
+-- --
+
+CREATE TABLE cursos_extracurriculares (
+    id_cursos INT AUTO_INCREMENT PRIMARY KEY,
+    nome varchar(100) not null,
+    descricao varchar(100) not null,
+    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+create Table Tema_tcc (
+	id_temas int auto_increment primary key,
+    nome varchar(100) not null
+);
+
+create table tema_tcc_cursos(
+	id_relacao int auto_increment primary key,
+    id_tema int not null,
+    id_cursos int not null,
+    FOREIGN KEY (id_tema) REFERENCES Tema_tcc(id_temas) ON DELETE CASCADE,
+    FOREIGN KEY (id_cursos) REFERENCES cursos_extracurriculares(id_cursos)
+);
+
+create table Curso_Usuario(
+	id_curso_unifan int primary key auto_increment,
+    id_usuario int not null,
+    id_cursos int not null,
+    porcentagem_completada int not null,
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
+    FOREIGN KEY (id_cursos) REFERENCES cursos_extracurriculares(id_cursos)
+);

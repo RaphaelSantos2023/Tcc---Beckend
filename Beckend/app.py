@@ -6,6 +6,7 @@ import datetime
 from functools import wraps
 from flask_cors import CORS
 
+
 app = Flask(__name__)
 CORS(app)
 app.config['SECRET_KEY'] = 'sua_chave_super_secreta'  # Troque para algo seguro
@@ -452,7 +453,6 @@ def detalhes_publicacao(current_user_id, current_user_role, id_publicacao):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
-
 
 if __name__ == '__main__':
     app.run(debug=True)
