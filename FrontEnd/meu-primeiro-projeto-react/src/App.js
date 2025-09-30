@@ -3,10 +3,10 @@ import LoginForm from './LoginForm';
 import RegisterForm from './RegisterForm';
 import Forum from './Forum';
 import NovaPublicacao from './NovaPublicacao';
+import GeminiChat from './GeminiChat';  // 👈 novo import
 
 function App() {
   const [view, setView] = useState('login');
-
   const isLoggedIn = !!localStorage.getItem('token');
 
   return (
@@ -18,6 +18,7 @@ function App() {
           </button>
           <NovaPublicacao />
           <Forum />
+          <GeminiChat /> {/* 👈 aparece só quando logado */}
         </>
       ) : (
         <>

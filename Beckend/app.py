@@ -5,7 +5,9 @@ import jwt
 import datetime
 from functools import wraps
 from flask_cors import CORS
-
+import os
+from google import genai
+cliente = genai.Client(api_key="Chave_api")
 
 app = Flask(__name__)
 CORS(app)
@@ -17,6 +19,8 @@ db_config = {
     'password': 'root',
     'database': 'tcc_bd'
 }
+
+
 
 def token_required(f):
     @wraps(f)
@@ -77,7 +81,7 @@ def roles_required(*allowed_roles):
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-
+    print(data)
     if not data:
         return jsonify({'message': 'JSON ausente na requisição.'}), 400
 
@@ -190,6 +194,70 @@ def register():
             cursor.close()
         if conn:
             conn.close()
+
+@app.route('/gemini/query', methods=['POST'])
+@token_required   # só logado
+def gemini_query(current_user_id, current_user_role):
+    data = request.get_json()
+    print(f"data: {data}")
+    prompt = data.get("prompt")
+    print(f"prompt: {prompt}")
+    if not prompt:
+        return jsonify({"error": "Prompt é obrigatório"}), 400
+
+    try:
+        # 🔹 Buscar perfil acadêmico do usuário para enriquecer o prompt
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT periodo_atual, ira_geral, interesses_principais, habilidades, objetivo_carreira
+            FROM perfis_academicos
+            WHERE id_usuario = %s
+        """, (current_user_id,))
+        perfil = cursor.fetchone()
+        print(f"perfil: {perfil}")
+        # Se não tiver perfil acadêmico, não dá erro, mas gera resposta só com prompt
+        contexto_extra = ""
+        if perfil:
+            contexto_extra = f"""
+            O usuário está no período {perfil['periodo_atual']}, com IRA {perfil['ira_geral']}.
+            Seus interesses são: {perfil['interesses_principais']}.
+            Habilidades: {perfil['habilidades']}.
+            Objetivo de carreira: {perfil['objetivo_carreira']}.
+            """
+            print(f"> contexto_extra: {contexto_extra}")
+
+        # 🔹 Monta prompt final para o Gemini
+        prompt_final = f"""
+        Usuário fez a seguinte pergunta: "{prompt}"
+        {contexto_extra}
+        Gere uma resposta útil, personalizada ao contexto acadêmico/profissional do usuário.
+        """
+
+        response = cliente.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt_final
+        )
+
+        print(response.text)
+
+        resposta_texto = response.text  # não .text
+
+        print(f"resposta_texto: {resposta_texto}")
+
+        return jsonify({
+            "prompt": prompt,
+            "response": resposta_texto,
+            "contexto_usado": bool(perfil)
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 @app.route('/login', methods=['POST'])
 def login():
