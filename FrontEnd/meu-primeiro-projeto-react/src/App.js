@@ -2,23 +2,35 @@ import React, { useState } from 'react';
 import LoginForm from './LoginForm';
 import RegisterForm from './RegisterForm';
 import Forum from './Forum';
-import NovaPublicacao from './NovaPublicacao';
-import GeminiChat from './GeminiChat';  // 👈 novo import
+import NovoForum from './NovoForum';
+import GeminiChat from './GeminiChat';
+import MateriaisList from './MateriaisList';
+import UploadMaterial from './UploadMaterial'; // 👈 import
 
 function App() {
   const [view, setView] = useState('login');
   const isLoggedIn = !!localStorage.getItem('token');
+  const tipoUsuario = localStorage.getItem('tipo_usuario'); // 👈 pega tipo
 
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '1rem' }}>
       {isLoggedIn ? (
         <>
-          <button onClick={() => { localStorage.removeItem('token'); window.location.reload(); }}>
+          <button onClick={() => { 
+            localStorage.removeItem('token'); 
+            localStorage.removeItem('tipo_usuario'); 
+            window.location.reload(); 
+          }}>
             Logout
           </button>
-          <NovaPublicacao />
+
+          <NovoForum />
           <Forum />
-          <GeminiChat /> {/* 👈 aparece só quando logado */}
+          <GeminiChat />
+
+          {/* 👇 Renderiza apenas se não for aluno */}
+          {tipoUsuario && tipoUsuario !== 'aluno' && <UploadMaterial />}
+          <MateriaisList/>
         </>
       ) : (
         <>

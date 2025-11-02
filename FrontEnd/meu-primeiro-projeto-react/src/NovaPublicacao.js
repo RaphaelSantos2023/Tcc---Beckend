@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-function NovaPublicacao() {
+function NovaPublicacao({ forumId }) {
   const [form, setForm] = useState({ titulo: '', conteudo: '', categoria: '' });
   const [msg, setMsg] = useState('');
 
@@ -10,9 +10,14 @@ function NovaPublicacao() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!forumId) {
+      setMsg('Selecione um fórum primeiro!');
+      return;
+    }
+
     const token = localStorage.getItem('token');
 
-    const res = await fetch('http://localhost:5000/forum/publicar', {
+    const res = await fetch(`http://localhost:5000/forum/${forumId}/publicar`, { // ✅ incluir forumId na URL
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

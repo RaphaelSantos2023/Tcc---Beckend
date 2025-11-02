@@ -18,9 +18,18 @@ function LoginForm() {
     });
 
     const data = await res.json();
+
     if (res.ok) {
       setMsg('Login bem-sucedido!');
-      localStorage.setItem('token', data.token); // Salva o token
+
+      // 🔹 Salvar token
+      localStorage.setItem('token', data.token);
+
+      // 🔹 Salvar tipo do usuário (para condicional no frontend)
+      localStorage.setItem('tipo_usuario', data.tipo_usuario);
+
+      // 🔹 Atualiza a página ou dispara um estado global para renderizar componentes
+      window.location.reload(); // ou você pode atualizar estado global se usar context/redux
     } else {
       setMsg(data.message || 'Erro no login');
     }

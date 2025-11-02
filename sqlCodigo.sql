@@ -1,4 +1,5 @@
 -- Criação do banco de dados
+
 CREATE DATABASE tcc_bd;
 USE tcc_bd;
 
@@ -93,6 +94,14 @@ CREATE TABLE preferencias_recomendacao (
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
 );
 
+CREATE TABLE foruns (
+    id_forum INT AUTO_INCREMENT PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    descricao TEXT,
+    criado_por INT,
+    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (criado_por) REFERENCES usuarios(id_usuario)
+);
 
 -- Tabela de publicações no fórum
 CREATE TABLE publicacoes_forum (
@@ -148,3 +157,8 @@ create table Curso_Usuario(
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
     FOREIGN KEY (id_cursos) REFERENCES cursos_extracurriculares(id_cursos)
 );
+
+ALTER TABLE publicacoes_forum
+ADD COLUMN id_forum INT NOT NULL,
+ADD FOREIGN KEY (id_forum) REFERENCES foruns(id_forum) ON DELETE CASCADE;
+
