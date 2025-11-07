@@ -92,6 +92,175 @@ def roles_required(*allowed_roles):
         return wrapper
     return decorator
 
+@app.route('/cursos', methods=['GET'])
+@token_required
+def listar_cursos(current_user_id, current_user_role):
+    """Lista todos os cursos disponíveis (todos podem ver)."""
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT id_cursos, nome, descricao, carga_horaria, link_acesso, criado_por
+        FROM cursos_extracurriculares
+        ORDER BY nome ASC
+    """)
+    cursos = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify({'cursos': cursos})
+
+
+@app.route('/cursos/criar', methods=['POST'])
+@token_required
+@roles_required('professor', 'parceiro', 'admin')
+def criar_curso(current_user_id, current_user_role):
+    """Criação de curso — permitido para todos exceto alunos."""
+    data = request.get_json()
+    nome = data.get('nome')
+    descricao = data.get('descricao')
+    carga_horaria = data.get('carga_horaria', 0)
+    link_acesso = data.get('link_acesso')
+
+    if not nome or not descricao:
+        return jsonify({'message': 'Nome e descrição são obrigatórios!'}), 400
+
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO cursos_extracurriculares (nome, descricao, carga_horaria, link_acesso, criado_por)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (nome, descricao, carga_horaria, link_acesso, current_user_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'message': 'Curso criado com sucesso!'}), 201
+
+
+@app.route('/cursos/<int:id_curso>', methods=['PUT'])
+@token_required
+@roles_required('professor', 'parceiro', 'admin')
+def editar_curso(current_user_id, current_user_role, id_curso):
+    """Edição de curso — permitido para todos exceto alunos."""
+    data = request.get_json()
+    nome = data.get('nome')
+    descricao = data.get('descricao')
+    carga_horaria = data.get('carga_horaria')
+    link_acesso = data.get('link_acesso')
+
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE cursos_extracurriculares
+        SET nome = COALESCE(%s, nome),
+            descricao = COALESCE(%s, descricao),
+            carga_horaria = COALESCE(%s, carga_horaria),
+            link_acesso = COALESCE(%s, link_acesso)
+        WHERE id_cursos = %s
+    """, (nome, descricao, carga_horaria, link_acesso, id_curso))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'message': 'Curso atualizado com sucesso!'}), 200
+
+
+@app.route('/cursos/<int:id_curso>', methods=['DELETE'])
+@token_required
+@roles_required('professor', 'parceiro', 'admin')
+def deletar_curso(current_user_id, current_user_role, id_curso):
+    """Exclusão de curso — permitido para todos exceto alunos."""
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM cursos_extracurriculares WHERE id_cursos = %s", (id_curso,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({'message': 'Curso removido com sucesso!'}), 200
+
+
+@app.route('/cursos/inscrever', methods=['POST'])
+@token_required
+@roles_required('aluno')
+def inscrever_curso(current_user_id, current_user_role):
+    """Inscrição em curso — apenas alunos podem."""
+    data = request.get_json()
+    id_curso = data.get('id_curso')
+
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO Curso_Usuario (id_usuario, id_cursos, porcentagem_completada)
+        VALUES (%s, %s, 0)
+    """, (current_user_id, id_curso))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({'message': 'Inscrição realizada com sucesso!'}), 201
+
+
+# ============================
+# ROTAS PARA TEMAS DE TCC
+# ============================
+
+@app.route('/temas', methods=['GET'])
+@token_required
+def listar_temas(current_user_id, current_user_role):
+    """Todos podem visualizar temas de TCC."""
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+    SELECT t.id_temas, t.nome AS titulo, t.area_conhecimento, t.data_criacao,
+           u.nome_completo AS criado_por
+    FROM tema_tcc t
+    JOIN usuarios u ON t.criado_por = u.id_usuario
+    ORDER BY t.data_criacao DESC
+    """)
+
+    temas = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify({'temas': temas})
+
+
+@app.route('/temas/criar', methods=['POST'])
+@token_required
+@roles_required('professor', 'parceiro', 'admin')
+def criar_tema(current_user_id, current_user_role):
+    """Professores, parceiros e admins podem propor temas de TCC."""
+    data = request.get_json()
+    nome = data.get('titulo')  # o front ainda envia "titulo", mas o campo no banco é "nome"
+    print(data.get('titulo') )
+    area_conhecimento = data.get('area_conhecimento')
+
+    if not nome:
+        return jsonify({'message': 'Título (nome) é obrigatório.'}), 400
+
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO tema_tcc (nome, area_conhecimento, criado_por)
+        VALUES (%s, %s, %s)
+    """, (nome, area_conhecimento, current_user_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'message': 'Tema de TCC criado com sucesso!'}), 201
+
+
+@app.route('/temas/<int:id_tema>', methods=['DELETE'])
+@token_required
+@roles_required('professor', 'parceiro', 'admin')
+def excluir_tema(current_user_id, current_user_role, id_tema):
+    """Permite excluir tema de TCC (exceto alunos)."""
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM tema_tcc WHERE id_tema = %s", (id_tema,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({'message': 'Tema de TCC removido com sucesso!'}), 200
+
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -209,62 +378,94 @@ def register():
         if conn:
             conn.close()
 
+@app.route('/perfil', methods=['POST'])
+@token_required
+@roles_required('aluno', 'professor')
+def criar_ou_atualizar_perfil(current_user_id, current_user_role):
+    data = request.get_json()
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO perfis_academicos (id_usuario, periodo_atual, ira_geral, interesses_principais, habilidades, objetivo_carreira)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE periodo_atual=%s, ira_geral=%s, interesses_principais=%s, habilidades=%s, objetivo_carreira=%s
+    """, (current_user_id, data['periodo_atual'], data['ira_geral'], data['interesses_principais'],
+          data['habilidades'], data['objetivo_carreira'],
+          data['periodo_atual'], data['ira_geral'], data['interesses_principais'],
+          data['habilidades'], data['objetivo_carreira']))
+    conn.commit()
+    return jsonify({'message': 'Perfil acadêmico salvo com sucesso!'})
+
+@app.route('/perfil', methods=['GET'])
+@token_required
+def get_perfil(current_user_id, current_user_role):
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM perfis_academicos WHERE id_usuario = %s", (current_user_id,))
+    perfil = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return jsonify({'perfil': perfil})
+
+
 @app.route('/gemini/query', methods=['POST'])
-@token_required   # só logado
+@token_required
 def gemini_query(current_user_id, current_user_role):
     data = request.get_json()
-    print(f"data: {data}")
     prompt = data.get("prompt")
-    print(f"prompt: {prompt}")
     if not prompt:
         return jsonify({"error": "Prompt é obrigatório"}), 400
 
+    conn = None
+    cursor = None
+
     try:
-        # 🔹 Buscar perfil acadêmico do usuário para enriquecer o prompt
+        # 🔹 Conecta e busca perfil acadêmico
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
-
         cursor.execute("""
             SELECT periodo_atual, ira_geral, interesses_principais, habilidades, objetivo_carreira
             FROM perfis_academicos
             WHERE id_usuario = %s
         """, (current_user_id,))
         perfil = cursor.fetchone()
-        print(f"perfil: {perfil}")
-        # Se não tiver perfil acadêmico, não dá erro, mas gera resposta só com prompt
+
         contexto_extra = ""
         if perfil:
             contexto_extra = f"""
             O usuário está no período {perfil['periodo_atual']}, com IRA {perfil['ira_geral']}.
-            Seus interesses são: {perfil['interesses_principais']}.
+            Interesses: {perfil['interesses_principais']}.
             Habilidades: {perfil['habilidades']}.
             Objetivo de carreira: {perfil['objetivo_carreira']}.
             """
-            print(f"> contexto_extra: {contexto_extra}")
 
-        # 🔹 Monta prompt final para o Gemini
+        # 🔹 Gera recomendação com Gemini
         prompt_final = f"""
-        Usuário fez a seguinte pergunta: "{prompt}"
+        Usuário perguntou: "{prompt}"
         {contexto_extra}
-        Gere uma resposta útil, personalizada ao contexto acadêmico/profissional do usuário.
+        Gere uma resposta personalizada, útil e voltada à trajetória acadêmica e profissional do usuário.
         """
-
         response = cliente.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt_final
         )
+        resposta_texto = response.text.strip()
 
-        print(response.text)
-
-        resposta_texto = response.text  # não .text
-
-        print(f"resposta_texto: {resposta_texto}")
+        # 🔹 Salva recomendação no banco
+        cursor.execute("""
+            INSERT INTO recomendacoes (id_usuario, prompt, resposta)
+            VALUES (%s, %s, %s)
+        """, (current_user_id, prompt, resposta_texto))
+        conn.commit()
+        id_recomendacao = cursor.lastrowid
 
         return jsonify({
+            "id_recomendacao": id_recomendacao,
             "prompt": prompt,
-            "response": resposta_texto,
-            "contexto_usado": bool(perfil)
-        })
+            "resposta": resposta_texto,
+            "contexto_usado": bool(perfil),
+            "message": "Recomendação gerada e salva com sucesso!"
+        }), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -272,6 +473,44 @@ def gemini_query(current_user_id, current_user_role):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
+@app.route('/recomendacoes/<int:id_recomendacao>/avaliar', methods=['POST'])
+@token_required
+def avaliar_recomendacao(current_user_id, current_user_role, id_recomendacao):
+    data = request.get_json()
+    nota = data.get('nota')
+    comentario = data.get('comentario', '')
+
+    if nota is None or not (1 <= int(nota) <= 5):
+        return jsonify({'message': 'A nota deve ser de 1 a 5.'}), 400
+
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO avaliacoes_recomendacao (id_recomendacao, id_usuario, nota, comentario)
+        VALUES (%s, %s, %s, %s)
+    """, (id_recomendacao, current_user_id, nota, comentario))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({'message': 'Avaliação registrada com sucesso!'}), 201
+
+@app.route('/recomendacoes', methods=['GET'])
+@token_required
+def listar_recomendacoes(current_user_id, current_user_role):
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT id_recomendacao, prompt, resposta, data_geracao
+        FROM recomendacoes
+        WHERE id_usuario = %s
+        ORDER BY data_geracao DESC
+    """, (current_user_id,))
+    recs = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify({'recomendacoes': recs})
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -282,6 +521,9 @@ def login():
 
     email = data['email']
     senha = data['senha']
+
+    conn = None
+    cursor = None
 
     try:
         conn = mysql.connector.connect(**db_config)
@@ -303,19 +545,23 @@ def login():
             'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=2)
         }, app.config['SECRET_KEY'], algorithm="HS256")
 
-        # 🔹 Retornar também tipo_usuario
         return jsonify({
             'token': token,
             'tipo_usuario': user['tipo_usuario']
-        })
+        }), 200
 
     except mysql.connector.Error as err:
+        print("Erro MySQL:", err)
         return jsonify({'message': 'Erro no banco de dados', 'error': str(err)}), 500
 
+    except Exception as e:
+        print("Erro inesperado:", e)
+        return jsonify({'message': 'Erro interno no login', 'error': str(e)}), 500
+
     finally:
-        if cursor:
+        if cursor is not None:
             cursor.close()
-        if conn:
+        if conn is not None:
             conn.close()
 
 @app.route('/admin-area', methods=['GET'])

@@ -11,8 +11,10 @@ function GeminiChat() {
     setResposta("Carregando...");
 
     try {
+      console.log(prompt)
       const data = await perguntarGemini(prompt);
-      setResposta(data.response || "Sem resposta do Gemini.");
+      console.log(data)
+      setResposta(data.resposta || "Sem resposta do Gemini.");
     } catch (error) {
       setResposta("Erro ao consultar o Gemini.");
       console.error(error);

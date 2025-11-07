@@ -114,6 +114,9 @@ CREATE TABLE publicacoes_forum (
     data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
 );
+ALTER TABLE publicacoes_forum
+ADD COLUMN id_forum INT NOT NULL,
+ADD FOREIGN KEY (id_forum) REFERENCES foruns(id_forum) ON DELETE CASCADE;
 
 -- Tabela de respostas às publicações
 CREATE TABLE respostas_forum (
@@ -158,7 +161,37 @@ create table Curso_Usuario(
     FOREIGN KEY (id_cursos) REFERENCES cursos_extracurriculares(id_cursos)
 );
 
-ALTER TABLE publicacoes_forum
-ADD COLUMN id_forum INT NOT NULL,
-ADD FOREIGN KEY (id_forum) REFERENCES foruns(id_forum) ON DELETE CASCADE;
+CREATE TABLE materiais (
+    id_material INT AUTO_INCREMENT PRIMARY KEY,
+    id_usuario INT NOT NULL,               -- quem subiu o arquivo (professor, parceiro ou admin)
+    titulo VARCHAR(255) NOT NULL,          -- título do material
+    descricao TEXT,                        -- descrição ou resumo
+    tipo_material ENUM('pdf','ppt','doc','outro') DEFAULT 'outro',
+    caminho_arquivo VARCHAR(500) NOT NULL, -- caminho ou URL do arquivo
+    data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
+);
+ALTER TABLE materiais
+ADD COLUMN tipo VARCHAR(50) DEFAULT 'outro';
+
+CREATE TABLE recomendacoes (
+    id_recomendacao INT AUTO_INCREMENT PRIMARY KEY,
+    id_usuario INT NOT NULL,
+    prompt TEXT NOT NULL,
+    resposta TEXT NOT NULL,
+    data_geracao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
+);
+
+CREATE TABLE IF NOT EXISTS avaliacoes_recomendacao (
+    id_avaliacao INT AUTO_INCREMENT PRIMARY KEY,
+    id_recomendacao INT NOT NULL,
+    id_usuario INT NOT NULL,
+    nota TINYINT CHECK (nota BETWEEN 1 AND 5),
+    comentario TEXT,
+    data_avaliacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_recomendacao) REFERENCES recomendacoes(id_recomendacao),
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
+);
+
 
