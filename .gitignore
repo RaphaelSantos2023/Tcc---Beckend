@@ -1,0 +1,5 @@
+.env
+*.env
+uploads/
+node_modules/
+__pycache__/

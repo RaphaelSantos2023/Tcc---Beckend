@@ -1,15 +1,13 @@
-from flask import Flask, request, jsonify,send_from_directory
-import mysql.connector
-from passlib.hash import bcrypt
-import jwt
-import datetime
+from flask import Flask, request, send_file, jsonify,send_from_directory
 from functools import wraps
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import os
+import tempfile
+from flask_bcrypt import Bcrypt
+from supabase import create_client, Client
 from google import genai
-
 load_dotenv()
 
 cliente = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -18,12 +16,12 @@ app = Flask(__name__)
 CORS(app)
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")  # Troque para algo seguro
 
-db_config = {
-    'host': os.getenv("DB_HOST") ,
-    'user': os.getenv("DB_USER"),
-    'password': os.getenv("DB_PASSWORD"),
-    'database': os.getenv("DB_NAME")
-}
+bcrypt = Bcrypt(app)
+
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
+
+supabase = create_client(url,key)
 
 ALLOWED_EXTENSIONS = {'pdf', 'ppt', 'pptx', 'doc', 'docx'}
 
@@ -34,86 +32,102 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def Get_Usuario(id):
+        print("aqui")
+        print(id)
+        return supabase.table("usuarios").select("*").eq("auth_id",id).execute()
+
+def Get_auth_id(id):
+        resp =  supabase.table("usuarios").select("auth_id").eq("id_usuario",id).execute()
+        print(f"resp.data[0][auth_id]: {resp.data[0]["auth_id"]}")
+        return resp.data[0].get("auth_id")
+
+def getnome(id):
+        resp =  supabase.table("usuarios").select("nome_completo").eq("id_usuario",id).execute()
+        print(f"resp.data[0][nome_completo]: {resp.data[0]["nome_completo"]}")
+        return resp.data[0]["nome_completo"]
+
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+
+        # PEGAR TOKEN
         token = None
-        if 'Authorization' in request.headers:
-            parts = request.headers['Authorization'].split()
-            if len(parts) == 2 and parts[0] == 'Bearer':
+        if "Authorization" in request.headers:
+            parts = request.headers["Authorization"].split()
+            if len(parts) == 2 and parts[0] == "Bearer":
                 token = parts[1]
 
         if not token:
-            return jsonify({'message': 'Token está faltando!'}), 401
-
-        conn = None
-        cursor = None  # ← inicializa aqui
+            return jsonify({"message": "Token está faltando!"}), 401
 
         try:
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            current_user_id = data['id_usuario']
+            # VALIDAR TOKEN NO SUPABASE
+            user = supabase.auth.get_user(token)
 
-            # Buscar tipo_usuario no banco para o usuário autenticado
-            conn = mysql.connector.connect(**db_config)
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT tipo_usuario FROM usuarios WHERE id_usuario = %s AND ativo = TRUE", (current_user_id,))
-            user = cursor.fetchone()
-            if not user:
-                return jsonify({'message': 'Usuário não encontrado ou inativo.'}), 401
+            if not user or not user.user:
+                return jsonify({"message": "Token inválido!"}), 401
 
-            current_user_role = user['tipo_usuario']
+            auth_id = user.user.id   # UUID do Supabase Auth
+
+            # Buscar usuário na sua tabela
+            usuario_resp = supabase.table("usuarios") \
+                .select("id_usuario, tipo_usuario") \
+                .eq("auth_id", auth_id) \
+                .eq("ativo", True) \
+                .execute()
+
+            if not usuario_resp.data:
+                return jsonify({"message": "Usuário sem registro no banco!"}), 401
+
+            current_user_id = usuario_resp.data[0]["id_usuario"]
+            current_user_role = usuario_resp.data[0]["tipo_usuario"]
 
         except Exception as e:
-            return jsonify({'message': 'Token inválido ou expirado!', 'error': str(e)}), 401
-
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
+            print("ERRO TOKEN:", e)
+            return jsonify({"message": "Erro ao validar token", "error": str(e)}), 401
 
         return f(current_user_id, current_user_role, *args, **kwargs)
+
     return decorated
 
-def roles_required(*allowed_roles):
-    """
-    Decorator para limitar acesso a usuários com papeis específicos.
-    Uso:
-      @roles_required('admin', 'professor')
-      def sua_rota(current_user_id, current_user_role):
-          ...
-    """
-    def decorator(f):
-        @wraps(f)
+def roles_required(*roles_permitidos):
+    def decorator(func):
+        @wraps(func)
         def wrapper(current_user_id, current_user_role, *args, **kwargs):
-            if current_user_role not in allowed_roles:
-                return jsonify({'message': 'Permissão negada para seu nível de usuário.'}), 403
-            return f(current_user_id, current_user_role, *args, **kwargs)
+
+            if current_user_role not in roles_permitidos:
+                return jsonify({"message": "Acesso negado."}), 403
+
+            return func(current_user_id, current_user_role, *args, **kwargs)
         return wrapper
     return decorator
+
 
 @app.route('/cursos', methods=['GET'])
 @token_required
 def listar_cursos(current_user_id, current_user_role):
     """Lista todos os cursos disponíveis (todos podem ver)."""
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT id_cursos, nome, descricao, carga_horaria, link_acesso, criado_por
-        FROM cursos_extracurriculares
-        ORDER BY nome ASC
-    """)
-    cursos = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify({'cursos': cursos})
 
+    try:
+        response = supabase.table("cursos_extracurriculares") \
+            .select("id_cursos, nome, descricao, carga_horaria, link_acesso, criado_por") \
+            .order("nome", desc=False) \
+            .execute()
+
+        cursos = response.data  # já vem como lista de dicionários
+
+        return jsonify({"cursos": cursos}), 200
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/cursos/criar', methods=['POST'])
 @token_required
 @roles_required('professor', 'parceiro', 'admin')
 def criar_curso(current_user_id, current_user_role):
     """Criação de curso — permitido para todos exceto alunos."""
+
     data = request.get_json()
     nome = data.get('nome')
     descricao = data.get('descricao')
@@ -121,82 +135,112 @@ def criar_curso(current_user_id, current_user_role):
     link_acesso = data.get('link_acesso')
 
     if not nome or not descricao:
-        return jsonify({'message': 'Nome e descrição são obrigatórios!'}), 400
+        return jsonify({"message": "Nome e descrição são obrigatórios!"}), 400
 
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO cursos_extracurriculares (nome, descricao, carga_horaria, link_acesso, criado_por)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (nome, descricao, carga_horaria, link_acesso, current_user_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        response = supabase.table("cursos_extracurriculares").insert({
+            "nome": nome,
+            "descricao": descricao,
+            "carga_horaria": carga_horaria,
+            "link_acesso": link_acesso,
+            "criado_por": current_user_id   # 🔥 IMPORTANTE!
+        }).execute()
 
-    return jsonify({'message': 'Curso criado com sucesso!'}), 201
+        return jsonify({
+            "message": "Curso criado com sucesso!",
+            "curso": response.data  # Já retorna o registro inserido
+        }), 201
 
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/cursos/<int:id_curso>', methods=['PUT'])
 @token_required
 @roles_required('professor', 'parceiro', 'admin')
 def editar_curso(current_user_id, current_user_role, id_curso):
     """Edição de curso — permitido para todos exceto alunos."""
+
     data = request.get_json()
-    nome = data.get('nome')
-    descricao = data.get('descricao')
-    carga_horaria = data.get('carga_horaria')
-    link_acesso = data.get('link_acesso')
 
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE cursos_extracurriculares
-        SET nome = COALESCE(%s, nome),
-            descricao = COALESCE(%s, descricao),
-            carga_horaria = COALESCE(%s, carga_horaria),
-            link_acesso = COALESCE(%s, link_acesso)
-        WHERE id_cursos = %s
-    """, (nome, descricao, carga_horaria, link_acesso, id_curso))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    # 🔥 Montagem dinâmica dos campos a atualizar
+    campos = {
+        "nome": data.get("nome"),
+        "descricao": data.get("descricao"),
+        "carga_horaria": data.get("carga_horaria"),
+        "link_acesso": data.get("link_acesso"),
+    }
 
-    return jsonify({'message': 'Curso atualizado com sucesso!'}), 200
+    # Remove valores None para não sobrescrever
+    campos = {k: v for k, v in campos.items() if v is not None}
 
+    if not campos:
+        return jsonify({"message": "Nenhum campo enviado para atualização"}), 400
+
+    try:
+        response = supabase.table("cursos_extracurriculares") \
+            .update(campos) \
+            .eq("id_cursos", id_curso) \
+            .execute()
+
+        # Se não atualizou nada → curso não existe
+        if not response.data:
+            return jsonify({"message": "Curso não encontrado"}), 404
+
+        return jsonify({
+            "message": "Curso atualizado com sucesso!",
+            "curso": response.data     # já retorna o registro atualizado
+        }), 200
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/cursos/<int:id_curso>', methods=['DELETE'])
 @token_required
 @roles_required('professor', 'parceiro', 'admin')
 def deletar_curso(current_user_id, current_user_role, id_curso):
     """Exclusão de curso — permitido para todos exceto alunos."""
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM cursos_extracurriculares WHERE id_cursos = %s", (id_curso,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({'message': 'Curso removido com sucesso!'}), 200
 
+    try:
+        response = supabase.table("cursos_extracurriculares") \
+            .delete() \
+            .eq("id_cursos", id_curso) \
+            .execute()
+
+        # Se não removeu nada → curso não existe
+        if not response.data:
+            return jsonify({"message": "Curso não encontrado"}), 404
+
+        return jsonify({"message": "Curso removido com sucesso!"}), 200
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/cursos/inscrever', methods=['POST'])
 @token_required
 @roles_required('aluno')
 def inscrever_curso(current_user_id, current_user_role):
     """Inscrição em curso — apenas alunos podem."""
+    id_usado = current_user_id
     data = request.get_json()
-    id_curso = data.get('id_curso')
+    id_curso = data.get("id_curso")
 
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO Curso_Usuario (id_usuario, id_cursos, porcentagem_completada)
-        VALUES (%s, %s, 0)
-    """, (current_user_id, id_curso))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({'message': 'Inscrição realizada com sucesso!'}), 201
+    if not id_curso:
+        return jsonify({"message": "É necessário informar id_curso"}), 400
 
+    try:
+        response = supabase.table("Curso_Usuario").insert({
+            "id_usuario": current_user_id,
+            "id_cursos": id_curso,
+            "porcentagem_completada": 0
+        }).execute()
+
+        return jsonify({
+            "message": "Inscrição realizada com sucesso!",
+            "registro": response.data   # já retorna a linha inserida
+        }), 201
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 # ============================
 # ROTAS PARA TEMAS DE TCC
@@ -206,20 +250,31 @@ def inscrever_curso(current_user_id, current_user_role):
 @token_required
 def listar_temas(current_user_id, current_user_role):
     """Todos podem visualizar temas de TCC."""
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-    SELECT t.id_temas, t.nome AS titulo, t.area_conhecimento, t.data_criacao,
-           u.nome_completo AS criado_por
-    FROM tema_tcc t
-    JOIN usuarios u ON t.criado_por = u.id_usuario
-    ORDER BY t.data_criacao DESC
-    """)
+    try:
+        response = supabase.table("tema_tcc") \
+            .select("*") \
+            .order("data_criacao", desc=True) \
+            .execute()
+        print(f"response: {response.data}")
 
-    temas = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify({'temas': temas})
+        temas = []
+
+        for row in response.data:
+            nome_criador = getnome(row['criado_por'])
+            print(f"nome_criador: {nome_criador}")
+            temas.append({
+                "id_tema": row["id_tema"],
+                "titulo": row["titulo"],
+                "area_conhecimento": row["area_conhecimento"],
+                "data_criacao": row["data_criacao"],
+                "criado_por": nome_criador
+            })
+
+        return jsonify({"temas": temas})
+
+    except Exception as e:
+        print(f"> erro na listagem de temas: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/temas/criar', methods=['POST'])
@@ -228,24 +283,31 @@ def listar_temas(current_user_id, current_user_role):
 def criar_tema(current_user_id, current_user_role):
     """Professores, parceiros e admins podem propor temas de TCC."""
     data = request.get_json()
-    nome = data.get('titulo')  # o front ainda envia "titulo", mas o campo no banco é "nome"
-    print(data.get('titulo') )
+    print(f"data: {data}")
+    nome = data.get('titulo')  # ainda vem como titulo do front
+    descricao = data.get('descricao')
     area_conhecimento = data.get('area_conhecimento')
 
     if not nome:
         return jsonify({'message': 'Título (nome) é obrigatório.'}), 400
 
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO tema_tcc (nome, area_conhecimento, criado_por)
-        VALUES (%s, %s, %s)
-    """, (nome, area_conhecimento, current_user_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        resposta = supabase.table("tema_tcc").insert({
+            "titulo": nome,
+            "descricao":descricao,
+            "area_conhecimento": area_conhecimento,
+            "criado_por": current_user_id
+        }).execute()
 
-    return jsonify({'message': 'Tema de TCC criado com sucesso!'}), 201
+        if not resposta.data:
+            return jsonify({"message": "Erro ao criar tema."}), 404
+
+        return jsonify({"message": "Tema de TCC criado com sucesso!"}), 201
+
+    except Exception as e:
+        print(f"> Erro na postagem de tema: {str(e)}")
+        return jsonify({"message": "Erro no servidor", "error": str(e)}), 500
+    
 
 
 @app.route('/temas/<int:id_tema>', methods=['DELETE'])
@@ -253,18 +315,29 @@ def criar_tema(current_user_id, current_user_role):
 @roles_required('professor', 'parceiro', 'admin')
 def excluir_tema(current_user_id, current_user_role, id_tema):
     """Permite excluir tema de TCC (exceto alunos)."""
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM tema_tcc WHERE id_tema = %s", (id_tema,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({'message': 'Tema de TCC removido com sucesso!'}), 200
+    try:
+        resposta = supabase.table("tema_tcc") \
+            .delete() \
+            .eq("id_tema", id_tema) \
+            .execute()
+
+        # Se não encontrou nenhum registro
+        if resposta.data == []:
+            return jsonify({"message": "Tema não encontrado."}), 404
+
+        # Se o Supabase retornou erro explícito
+        if not resposta.data:
+            return jsonify({"message": "Erro ao remover tema."}), 404
+
+        return jsonify({"message": "Tema de TCC removido com sucesso!"}), 200
+
+    except Exception as e:
+        return jsonify({"message": "Erro interno no servidor", "error": str(e)}), 500
 
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-    print(data)
+
     if not data:
         return jsonify({'message': 'JSON ausente na requisição.'}), 400
 
@@ -272,163 +345,161 @@ def register():
     if any(field not in data for field in required_fields):
         return jsonify({'message': 'Campos obrigatórios faltando'}), 400
 
+    print(data)
+
     email = data['email']
     senha = data['senha']
     nome_completo = data['nome_completo']
-    tipo_usuario = data.get('tipo_usuario', 'aluno').lower()
+    tipo_usuario = data['tipo_usuario'].lower()
     curso_atual = data.get('curso_atual')
     genero = data.get('genero')
-    data_nascimento = data.get('data_nascimento')  # YYYY-MM-DD
-    
-    senha_hash = bcrypt.hash(senha)
+    data_nascimento = data.get('data_nascimento')
 
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
+        # ===== 1️⃣ CRIA USUÁRIO NO SUPABASE AUTH =====
+        auth_res = supabase.auth.sign_up({"email": email, "password": senha})
 
-        cursor.execute("SELECT id_usuario FROM usuarios WHERE email = %s", (email,))
-        if cursor.fetchone():
-            return jsonify({'message': 'Email já cadastrado'}), 409
+        if auth_res.user is None:
+            return jsonify({'message': 'Erro ao registrar usuário no Supabase'}), 500
 
-        sql_user = """
-            INSERT INTO usuarios (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        cursor.execute(sql_user, (email, senha_hash, nome_completo, data_nascimento, genero, curso_atual, tipo_usuario))
-        conn.commit()
-        id_usuario = cursor.lastrowid
+        # ===== 2️⃣ GERAR HASH DA SENHA =====
+        # converte para string para salvar no banco
 
-        # Se for parceiro (empresa ou faculdade), criar registro na tabela parceiros
-        if tipo_usuario == 'parceiro':
-            tipo_parceiro = data.get('tipo_parceiro')  # 'empresa' ou 'faculdade'
-            nome_fantasia = data.get('nome_fantasia')
-            razao_social = data.get('razao_social')
-            cnpj = data.get('cnpj')
+        # ===== 3️⃣ SALVAR USUÁRIO NA TABELA usuarios =====
+        resp = supabase.table("usuarios").insert({
+            "email": email,
+            "nome_completo": nome_completo,
+            "curso_atual": curso_atual,
+            "genero": genero,
+            "data_nascimento": data_nascimento,
+            "tipo_usuario": tipo_usuario,
+            "senha_hash": senha,
+            "auth_id": auth_res.user.id
+        }).execute()
 
-            if not tipo_parceiro or tipo_parceiro not in ['empresa', 'faculdade']:
-                return jsonify({'message': 'Tipo de parceiro inválido ou ausente'}), 400
+        if not resp.data:
+            return jsonify({
+                "message": "Erro ao criar usuário"
+            }), 404
 
-            telefone = data.get('telefone')
-            site = data.get('site')
-            email_parceiro = data.get('email_parceiro', email)  # usa o mesmo email do usuário, se não enviado outro
+        # ===== 4️⃣ SE FOR PARCEIRO: TABELA parceiros =====
+        if tipo_usuario == "parceiro":
+            tipo_parceiro = data.get("tipo_parceiro")
+            if tipo_parceiro not in ["empresa", "faculdade"]:
+                return jsonify({'message': 'Tipo de parceiro inválido'}), 400
 
-            sql_parceiro = """
-                INSERT INTO parceiros (
-                    id_usuario, tipo_parceiro, nome_fantasia, razao_social, cnpj,
-                    telefone, email, site
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            cursor.execute(sql_parceiro, (
-                id_usuario,
-                tipo_parceiro,
-                nome_fantasia,
-                razao_social,
-                cnpj,
-                telefone,
-                email_parceiro,
-                site
-            ))
+            supabase.table("parceiros").insert({
+                "tipo_parceiro": tipo_parceiro,
+                "nome_fantasia": data.get("nome_fantasia"),
+                "razao_social": data.get("razao_social"),
+                "cnpj": data.get("cnpj"),
+                "telefone": data.get("telefone"),
+                "email": data.get("email_parceiro", email),
+                "site": data.get("site")
+            }).execute()
 
-            conn.commit()
-        # Se for professor, criar entrada na tabela dados_professor
-        if tipo_usuario == 'professor':
-            formacao = data.get('formacao')
-            area_atuacao = data.get('area_atuacao')
-            tempo_experiencia = data.get('tempo_experiencia')
+        # ===== 5️⃣ PROFESSOR =====
+        if tipo_usuario == "professor":
+            supabase.table("dados_professor").insert({
+                "formacao": data.get("formacao"),
+                "area_atuacao": data.get("area_atuacao"),
+                "tempo_experiencia": data.get("tempo_experiencia")
+            }).execute()
 
-            sql_dados_prof = """
-                INSERT INTO dados_professor (id_usuario, formacao, area_atuacao, tempo_experiencia)
-                VALUES (%s, %s, %s, %s)
-            """
-            cursor.execute(sql_dados_prof, (id_usuario, formacao, area_atuacao, tempo_experiencia))
-            conn.commit()
-        
-        # Se veio endereço no JSON, salvar na tabela de endereços
-        endereco = data.get('endereco')
+        # ===== 6️⃣ ENDEREÇO =====
+        endereco = data.get("endereco")
         if endereco:
-            sql_endereco = """
-                INSERT INTO enderecos (
-                    id_usuario, cep, logradouro, numero, complemento,
-                    bairro, cidade, estado, pais, tipo_endereco
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            cursor.execute(sql_endereco, (
-                id_usuario,
-                endereco.get('cep'),
-                endereco.get('logradouro'),
-                endereco.get('numero'),
-                endereco.get('complemento'),
-                endereco.get('bairro'),
-                endereco.get('cidade'),
-                endereco.get('estado'),
-                endereco.get('pais', 'Brasil'),
-                endereco.get('tipo_endereco', 'residencial')
-            ))
-            conn.commit()
+            supabase.table("enderecos").insert({
+                "cep": endereco.get("cep"),
+                "logradouro": endereco.get("logradouro"),
+                "numero": endereco.get("numero"),
+                "complemento": endereco.get("complemento"),
+                "bairro": endereco.get("bairro"),
+                "cidade": endereco.get("cidade"),
+                "estado": endereco.get("estado"),
+                "pais": endereco.get("pais", "Brasil"),
+                "tipo_endereco": endereco.get("tipo_endereco", "residencial")
+            }).execute()
 
-        return jsonify({'message': 'Usuário registrado com sucesso', 'id_usuario': id_usuario}), 201
+        return jsonify({"message": "Usuário registrado com sucesso"}), 201
 
-    except mysql.connector.Error as err:
-        print("Erro MySQL:", err)
-        return jsonify({'message': 'Erro no banco de dados', 'error': str(err)}), 500
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+    except Exception as e:
+        print(str(e))
+        return jsonify({
+            "message": "Erro no servidor",
+            "error": str(e)
+        }), 500
 
 @app.route('/perfil', methods=['POST'])
 @token_required
 @roles_required('aluno', 'professor')
 def criar_ou_atualizar_perfil(current_user_id, current_user_role):
     data = request.get_json()
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO perfis_academicos (id_usuario, periodo_atual, ira_geral, interesses_principais, habilidades, objetivo_carreira)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE periodo_atual=%s, ira_geral=%s, interesses_principais=%s, habilidades=%s, objetivo_carreira=%s
-    """, (current_user_id, data['periodo_atual'], data['ira_geral'], data['interesses_principais'],
-          data['habilidades'], data['objetivo_carreira'],
-          data['periodo_atual'], data['ira_geral'], data['interesses_principais'],
-          data['habilidades'], data['objetivo_carreira']))
-    conn.commit()
-    return jsonify({'message': 'Perfil acadêmico salvo com sucesso!'})
+
+    if not data:
+        return jsonify({'message': 'JSON ausente'}), 400
+
+    required_fields = ["periodo_atual", "ira_geral", "interesses_principais", "habilidades", "objetivo_carreira"]
+    if any(f not in data for f in required_fields):
+        return jsonify({"message": "Campos obrigatórios faltando"}), 400
+
+    payload = {
+        "id_usuario": current_user_id,
+        "periodo_atual": data["periodo_atual"],
+        "ira_geral": data["ira_geral"],
+        "interesses_principais": data["interesses_principais"],
+        "habilidades": data["habilidades"],
+        "objetivo_carreira": data["objetivo_carreira"]
+    }
+
+    # UPSERT = INSERT ou UPDATE AUTOMÁTICO
+    response = supabase.table("perfis_academicos").upsert(payload).execute()
+
+    if not response.data:
+        return jsonify({"message": "Erro ao salvar perfil"}), 404
+
+    return jsonify({"message": "Perfil acadêmico salvo com sucesso!"}), 200
 
 @app.route('/perfil', methods=['GET'])
 @token_required
 def get_perfil(current_user_id, current_user_role):
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM perfis_academicos WHERE id_usuario = %s", (current_user_id,))
-    perfil = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return jsonify({'perfil': perfil})
+    response = (
+        supabase
+        .table("perfis_academicos")
+        .select("*")
+        .eq("id_usuario", current_user_id)
+        .single()
+        .execute()
+    )
 
+    if not response.data:
+        return jsonify({"message": "Nenhum perfil encontrado"}), 404
+
+    return jsonify({"perfil": response.data}), 200
 
 @app.route('/gemini/query', methods=['POST'])
 @token_required
 def gemini_query(current_user_id, current_user_role):
+    print(f"current_user_id: {current_user_id}")
+
+    id_usado = current_user_id
+    print(id_usado)
     data = request.get_json()
     prompt = data.get("prompt")
+
     if not prompt:
         return jsonify({"error": "Prompt é obrigatório"}), 400
 
-    conn = None
-    cursor = None
-
     try:
-        # 🔹 Conecta e busca perfil acadêmico
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT periodo_atual, ira_geral, interesses_principais, habilidades, objetivo_carreira
-            FROM perfis_academicos
-            WHERE id_usuario = %s
-        """, (current_user_id,))
-        perfil = cursor.fetchone()
+        # 🔹 Busca perfil acadêmico no Supabase
+        perfil_resp = (
+            supabase.table("perfis_academicos")
+            .select("periodo_atual, ira_geral, interesses_principais, habilidades, objetivo_carreira")
+            .eq("id_usuario", id_usado)
+            .execute()
+        )
+
+        perfil = perfil_resp.data
 
         contexto_extra = ""
         if perfil:
@@ -439,78 +510,117 @@ def gemini_query(current_user_id, current_user_role):
             Objetivo de carreira: {perfil['objetivo_carreira']}.
             """
 
-        # 🔹 Gera recomendação com Gemini
+        # 🔹 Monta prompt final
         prompt_final = f"""
         Usuário perguntou: "{prompt}"
         {contexto_extra}
         Gere uma resposta personalizada, útil e voltada à trajetória acadêmica e profissional do usuário.
         """
+        print(f"prompt_final: {prompt_final}")
+        # 🔹 Gera resposta com Gemini
         response = cliente.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt_final
         )
+        print(f"response: {response}")
         resposta_texto = response.text.strip()
 
-        # 🔹 Salva recomendação no banco
-        cursor.execute("""
-            INSERT INTO recomendacoes (id_usuario, prompt, resposta)
-            VALUES (%s, %s, %s)
-        """, (current_user_id, prompt, resposta_texto))
-        conn.commit()
-        id_recomendacao = cursor.lastrowid
+        print(f"resposta_texto: {resposta_texto}")
 
+        # 🔹 Salva recomendação no SUPABASE
+        insert_resp = (
+            supabase.table("recomendacoes")
+            .insert({
+                "id_usuario": id_usado,
+                "prompt": prompt,
+                "resposta": resposta_texto
+            })
+            .execute()
+        )
+
+        if not insert_resp.data:
+            return jsonify({"error": "Falha ao inserir recomendação no banco!"}), 404
+
+    
+        print(f"id_recomendacao: {insert_resp.data[0]["id_recomendacao"]}, prompt: {prompt},resposta: {resposta_texto}, contexto_usado: {perfil}")
+        
         return jsonify({
-            "id_recomendacao": id_recomendacao,
+            "id_recomendacao": insert_resp.data[0]["id_recomendacao"],  # se sua tabela usa id SERIAL
             "prompt": prompt,
             "resposta": resposta_texto,
-            "contexto_usado": bool(perfil),
+            "contexto_usado": perfil is not None,
             "message": "Recomendação gerada e salva com sucesso!"
         }), 200
 
     except Exception as e:
+        print(f"erro por que aconteceu algo:{str(e)}")
         return jsonify({"error": str(e)}), 500
-
-    finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
 
 @app.route('/recomendacoes/<int:id_recomendacao>/avaliar', methods=['POST'])
 @token_required
 def avaliar_recomendacao(current_user_id, current_user_role, id_recomendacao):
     data = request.get_json()
+    print(f"data: {data}")
     nota = data.get('nota')
-    comentario = data.get('comentario', '')
+    comentario = data.get('comentario')
 
+    # 🔹 Validação da nota
     if nota is None or not (1 <= int(nota) <= 5):
         return jsonify({'message': 'A nota deve ser de 1 a 5.'}), 400
 
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO avaliacoes_recomendacao (id_recomendacao, id_usuario, nota, comentario)
-        VALUES (%s, %s, %s, %s)
-    """, (id_recomendacao, current_user_id, nota, comentario))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        # 🔹 Verifica se a recomendação existe
+        rec_resp = (
+            supabase.table("recomendacoes")
+            .select("id_recomendacao")
+            .eq("id_recomendacao", id_recomendacao)
+            .execute()
+        )
 
-    return jsonify({'message': 'Avaliação registrada com sucesso!'}), 201
+        if rec_resp.data is None:
+            return jsonify({"message": "Recomendação não encontrada."}), 404
+
+        # 🔹 Insere avaliação
+        insert_resp = (
+            supabase.table("avaliacoes_recomendacao")
+            .insert({
+                "id_recomendacao": id_recomendacao,
+                "id_usuario": current_user_id,
+                "nota": nota,
+                "comentario": comentario
+            })
+            .execute()
+        )
+
+        if not insert_resp:
+            return jsonify({"message": "erro de insert"}), 404
+
+        return jsonify({"message": "Avaliação registrada com sucesso!"}), 201
+
+    except Exception as e:
+        print(f"erro ao avaliar: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/recomendacoes', methods=['GET'])
 @token_required
 def listar_recomendacoes(current_user_id, current_user_role):
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT id_recomendacao, prompt, resposta, data_geracao
-        FROM recomendacoes
-        WHERE id_usuario = %s
-        ORDER BY data_geracao DESC
-    """, (current_user_id,))
-    recs = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify({'recomendacoes': recs})
+
+    try:
+        # 🔹 Busca as recomendações do usuário
+        response = supabase.table("recomendacoes") \
+            .select("id_recomendacao, prompt, resposta, data_geracao") \
+            .eq("id_usuario", current_user_id) \
+            .order("data_geracao", desc=True) \
+            .execute()
+
+        # Se a query falhar
+        if not response.data:
+            return jsonify({"messagge": "erro de response"}), 404
+
+        return jsonify({"recomendacoes": response.data}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -521,71 +631,65 @@ def login():
 
     email = data['email']
     senha = data['senha']
-
-    conn = None
-    cursor = None
-
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
+        # 🔹 Login pelo Supabase Auth
+        resp = supabase.auth.sign_in_with_password({
+            "email": email,
+            "password": senha
+        })
 
-        # 🔹 Buscar id_usuario, senha_hash e tipo_usuario
-        cursor.execute("""
-            SELECT id_usuario, senha_hash, tipo_usuario
-            FROM usuarios
-            WHERE email = %s AND ativo = TRUE
-        """, (email,))
-        user = cursor.fetchone()
-
-        if not user or not bcrypt.verify(senha, user['senha_hash']):
+        if not resp.user:
             return jsonify({'message': 'Usuário ou senha incorretos'}), 401
 
-        token = jwt.encode({
-            'id_usuario': user['id_usuario'],
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=2)
-        }, app.config['SECRET_KEY'], algorithm="HS256")
+        print(resp.user)
+        
+        user_id = resp.user.id     # ID AUTÊNTICO DO SUPABASE
+        token_supabase = resp.session.access_token  # Token JWT gerado pelo Supabase
+
+        # 🔹 Buscar tipo_usuario na tabela do projeto (caso você tenha essa coluna separada)
+        tipo_resp = supabase.table("usuarios") \
+            .select("tipo_usuario") \
+            .eq("auth_id", user_id)\
+            .execute()
+
+        tipo_usuario = tipo_resp.data[0]["tipo_usuario"] if tipo_resp.data else "aluno"
 
         return jsonify({
-            'token': token,
-            'tipo_usuario': user['tipo_usuario']
+            "token": token_supabase,
+            "tipo_usuario": tipo_usuario
         }), 200
 
-    except mysql.connector.Error as err:
-        print("Erro MySQL:", err)
-        return jsonify({'message': 'Erro no banco de dados', 'error': str(err)}), 500
-
     except Exception as e:
-        print("Erro inesperado:", e)
-        return jsonify({'message': 'Erro interno no login', 'error': str(e)}), 500
-
-    finally:
-        if cursor is not None:
-            cursor.close()
-        if conn is not None:
-            conn.close()
+        print("ERRO LOGIN:", e)
+        return jsonify({"message": "Erro interno no login", "error": str(e)}), 500
 
 @app.route('/admin-area', methods=['GET'])
-@token_required
-@roles_required('admin')
+@token_required     # ⬅ mantém seu validador de token
+@roles_required('admin')   # ⬅ mantém a mesma checagem de papel
 def admin_area(current_user_id, current_user_role):
-    return jsonify({'message': f'Bem-vindo ao painel admin, usuário {current_user_id}!'})
+    return jsonify({
+        "message": f"Bem-vindo ao painel admin, usuário {current_user_id}!"
+    }), 200
 
 @app.route('/professor-area', methods=['GET'])
 @token_required
 @roles_required('admin', 'professor')
 def professor_area(current_user_id, current_user_role):
-    return jsonify({'message': f'Área de professores, usuário {current_user_id} com papel {current_user_role}.'})
+    return jsonify({
+        'message': f'Área de professores, usuário {current_user_id} com papel {current_user_role}.'
+    }), 200
 
 @app.route('/aluno-area', methods=['GET'])
 @token_required
 @roles_required('aluno', 'professor', 'admin')
 def aluno_area(current_user_id, current_user_role):
-    return jsonify({'message': f'Área de alunos para usuário {current_user_id}.'})
+    return jsonify({
+        'message': f'Área de alunos para usuário {current_user_id}.'
+    }), 200
 
 @app.route('/logout', methods=['POST'])
 @token_required
 def logout(current_user_id, current_user_role):
-    # Logout básico (JWT stateless)
     return jsonify({'message': 'Logout realizado com sucesso.'})
 
 @app.route('/alunos', methods=['GET'])
@@ -593,86 +697,62 @@ def logout(current_user_id, current_user_role):
 @roles_required('admin', 'professor')  # Somente admins e professores podem acessar
 def listar_alunos(current_user_id, current_user_role):
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
+        response = supabase.table("usuarios").select(
+            "id_usuario, nome_completo, email, curso_atual, data_nascimento, genero"
+        ).eq("tipo_usuario", "aluno").eq("ativo", True).execute()
 
-        cursor.execute("""
-            SELECT id_usuario, nome_completo, email, curso_atual, data_nascimento, genero
-            FROM usuarios
-            WHERE tipo_usuario = 'aluno' AND ativo = TRUE
-        """)
-        alunos = cursor.fetchall()
+        alunos = response.data
 
-        return jsonify({'alunos': alunos})
+        return jsonify({'alunos': alunos}), 200
 
-    except mysql.connector.Error as err:
-        print("Erro MySQL:", err)
-        return jsonify({'message': 'Erro ao buscar alunos', 'error': str(err)}), 500
+    except Exception as e:
+        print("Erro Supabase:", e)
+        return jsonify({'message': 'Erro ao buscar alunos', 'error': str(e)}), 500
 
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 @app.route('/parceiros', methods=['GET'])
 @token_required
 @roles_required('admin', 'professor')
 def listar_parceiros(current_user_id, current_user_role):
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
+        response = supabase.table("parceiros").select("""
+            id_parceiro,
+            tipo_parceiro,
+            nome_fantasia,
+            razao_social,
+            cnpj,
+            usuarios:usuarios!fk_parceiros_id_usuario(
+                nome_completo,
+                email,
+                ativo
+            )
+        """).execute()
 
-        cursor.execute("""
-            SELECT p.id_parceiro, u.nome_completo AS responsavel, u.email, p.tipo_parceiro,
-                   p.nome_fantasia, p.razao_social, p.cnpj
-            FROM parceiros p
-            JOIN usuarios u ON p.id_usuario = u.id_usuario
-            WHERE u.ativo = TRUE
-        """)
-        parceiros = cursor.fetchall()
-        return jsonify({'parceiros': parceiros})
+        parceiros = [
+            {
+                "id_parceiro": p["id_parceiro"],
+                "tipo_parceiro": p["tipo_parceiro"],
+                "nome_fantasia": p["nome_fantasia"],
+                "razao_social": p["razao_social"],
+                "cnpj": p["cnpj"],
+                "responsavel": p["usuarios"]["nome_completo"],
+                "email": p["usuarios"]["email"],
+            }
+            for p in response.data
+            if p["usuarios"] and p["usuarios"]["ativo"] == True
+        ]
 
-    except mysql.connector.Error as err:
-        return jsonify({'message': 'Erro ao buscar parceiros', 'error': str(err)}), 500
+        return jsonify({"parceiros": parceiros}), 200
 
-    finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
-
-@app.route('/parceiro-area', methods=['GET'])
-@token_required
-@roles_required('parceiro', 'admin')
-def parceiro_area(current_user_id, current_user_role):
-    try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
-
-        # Buscar os dados do parceiro
-        cursor.execute("""
-            SELECT p.id_parceiro, p.tipo_parceiro, p.nome_fantasia, p.razao_social, p.cnpj
-            FROM parceiros p
-            WHERE p.id_usuario = %s
-        """, (current_user_id,))
-        parceiro = cursor.fetchone()
-
-        if not parceiro:
-            return jsonify({'message': 'Parceiro não encontrado'}), 404
-
-        return jsonify({'message': f'Bem-vindo, parceiro!', 'parceiro': parceiro})
-
-    except mysql.connector.Error as err:
-        return jsonify({'message': 'Erro no painel do parceiro', 'error': str(err)}), 500
-
-    finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+    except Exception as e:
+        return jsonify({'message': 'Erro ao buscar parceiros', 'error': str(e)}), 500
 
 @app.route('/forum/criar', methods=['POST'])
 @token_required
 @roles_required('aluno', 'professor', 'admin', 'parceiro')
 def criar_forum(current_user_id, current_user_role):
     data = request.get_json()
+
     nome = data.get('nome')
     descricao = data.get('descricao')
 
@@ -680,37 +760,60 @@ def criar_forum(current_user_id, current_user_role):
         return jsonify({'message': 'Nome do fórum é obrigatório.'}), 400
 
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
+        response = supabase.table("foruns").insert({
+            "nome": nome,
+            "descricao": descricao,
+            "criado_por": current_user_id
+        }).execute()
 
-        cursor.execute("""
-            INSERT INTO foruns (nome, descricao, criado_por)
-            VALUES (%s, %s, %s)
-        """, (nome, descricao, current_user_id))
-        conn.commit()
+        # Se quiser retornar o ID criado
+        print(f"response.data[0][id_forum]: {response.data[0]["id_forum"]}")
+        forum_id = response.data[0]["id_forum"] if response.data else None
+        print(f"forum_id: {forum_id}")
 
-        return jsonify({'message': 'Fórum criado com sucesso!'}), 201
-    finally:
-        cursor.close()
-        conn.close()
+        return jsonify({
+            "message": "Fórum criado com sucesso!",
+            "id_forum": forum_id
+        }), 201
+
+    except Exception as e:
+        print("ERRO SUPABASE →", str(e))
+        return jsonify({"message": "Erro ao criar fórum", "error": str(e)}), 500
 
 @app.route('/forum', methods=['GET'])
 @token_required
 def listar_foruns(current_user_id, current_user_role):
+    print("Forum: listagem")
+    
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT f.id_forum, f.nome, f.descricao, f.data_criacao, u.nome_completo AS criador
-            FROM foruns f
-            LEFT JOIN usuarios u ON f.criado_por = u.id_usuario
-            ORDER BY f.data_criacao DESC
-        """)
-        foruns = cursor.fetchall()
-        return jsonify({'foruns': foruns})
-    finally:
-        cursor.close()
-        conn.close()
+        response = supabase.table("foruns").select("""
+            id_forum,
+            nome,
+            descricao,
+            data_criacao,
+            criado_por
+        """).order("data_criacao", desc=True).execute()
+
+        print(f"response lista forum:{response}")
+
+        foruns = []
+        for f in response.data:
+            criador_nome = getnome(f.get("criado_por"))
+            print(criador_nome)
+            foruns.append({
+                "id_forum": f.get("id_forum"),
+                "nome": f.get("nome"),
+                "descricao": f.get("descricao"),
+                "data_criacao": f.get("data_criacao"),
+                "criador": criador_nome
+            })
+        print(f"Foruns: {foruns}")
+
+        return jsonify({"foruns": foruns}), 200
+
+    except Exception as e:
+        print("ERRO SUPABASE Forum →", str(e))
+        return jsonify({"message": "Erro ao listar fóruns", "error": str(e)}), 500
 
 @app.route('/forum/<int:id_forum>/publicar', methods=['POST'])
 @token_required
@@ -720,54 +823,73 @@ def publicar_post(current_user_id, current_user_role, id_forum):
     titulo = data.get('titulo')
     conteudo = data.get('conteudo')
     categoria = data.get('categoria')
-    print(f"id_forum: {id_forum}")
+
     if not titulo or not conteudo:
         return jsonify({'message': 'Título e conteúdo são obrigatórios.'}), 400
 
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
+        response = supabase.table("publicacoes_forum").insert({
+            "id_usuario": current_user_id,
+            "titulo": titulo,
+            "conteudo": conteudo,
+            "categoria": categoria,
+            "id_forum": id_forum
+        }).execute()
 
-        cursor.execute("""
-            INSERT INTO publicacoes_forum (id_usuario, titulo, conteudo, categoria,id_forum)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (current_user_id, titulo, conteudo, categoria,id_forum))
-        conn.commit()
+        # Retornar o ID do post criado (opcional, mas útil)
+        post_id = response.data[0]["id_publicacao"] if response.data else None
 
-        return jsonify({'message': 'Publicação criada com sucesso!'}), 201
-    finally:
-        cursor.close()
-        conn.close()
+        return jsonify({
+            "message": "Publicação criada com sucesso!",
+            "id_post": post_id
+        }), 201
+
+    except Exception as e:
+        print("ERRO SUPABASE →", str(e))
+        return jsonify({"message": "Erro ao criar publicação", "error": str(e)}), 500
 
 @app.route('/forum/<int:id_forum>/publicacoes', methods=['GET'])
 @token_required
 def listar_publicacoes(current_user_id, current_user_role, id_forum):
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
+        response = supabase.table("publicacoes_forum").select("""
+            id_publicacao,
+            titulo,
+            conteudo,
+            categoria,
+            data_criacao,
+            id_usuario
+            )
+        """).eq("id_forum", id_forum).order("data_criacao", desc=True).execute()
 
-        cursor.execute("""
-            SELECT p.id_publicacao, p.titulo, p.conteudo, p.categoria, p.data_criacao,
-                   u.nome_completo AS autor
-            FROM publicacoes_forum p
-            JOIN usuarios u ON p.id_usuario = u.id_usuario
-            WHERE p.id_forum = %s
-            ORDER BY p.data_criacao DESC
-        """, (id_forum,))
-        posts = cursor.fetchall()
-        return jsonify({'publicacoes': posts})
-    finally:
-        cursor.close()
-        conn.close()
+        publicacoes = []
+        for p in response.data:
+            autor = getnome(p.get("id_usuario"))
+            publicacoes.append({
+                "id_publicacao": p.get("id_publicacao"),
+                "titulo": p.get("titulo"),
+                "conteudo": p.get("conteudo"),
+                "categoria": p.get("categoria"),
+                "data_criacao": p.get("data_criacao"),
+                "autor": autor
+            })
+
+        return jsonify({"publicacoes": publicacoes}), 200
+
+    except Exception as e:
+        print("ERRO SUPABASE →", str(e))
+        return jsonify({"message": "Erro ao listar publicações", "error": str(e)}), 500
 
 @app.route('/materiais/upload', methods=['POST'])
 @token_required
-@roles_required('professor', 'parceiro', 'admin')  # só estes podem enviar
+@roles_required('professor', 'parceiro', 'admin')
 def upload_material(current_user_id, current_user_role):
+
     if 'arquivo' not in request.files:
         return jsonify({'message': 'Nenhum arquivo enviado'}), 400
 
     file = request.files['arquivo']
+    print(f"file: {file}")
     if file.filename == '':
         return jsonify({'message': 'Nenhum arquivo selecionado'}), 400
 
@@ -775,47 +897,87 @@ def upload_material(current_user_id, current_user_role):
         return jsonify({'message': 'Tipo de arquivo não permitido'}), 400
 
     filename = secure_filename(file.filename)
-    caminho = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(caminho)
-
-    titulo = request.form.get('titulo')
-    descricao = request.form.get('descricao', '')
-    tipo_material = request.form.get('tipo_material', 'outro')
-    assunto = request.form.get('tipo', '')  # 🔹 novo campo "assunto"
-
-    if not titulo:
-        return jsonify({'message': 'Título é obrigatório'}), 400
-
+    print(f"filename: {filename}")
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO materiais (id_usuario, titulo, descricao, tipo_material, tipo, caminho_arquivo)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (current_user_id, titulo, descricao, tipo_material, assunto, caminho))
-        conn.commit()
+        # 🔹 Upload para Supabase Storage (pasta 'materiais')
+        file_bytes = file.read()  # lê os bytes do arquivo
+        storage_response = supabase.storage.from_('materiais').upload(
+            f"{current_user_id}/{filename}",
+            file_bytes
+        )
+        print(f"storage_response: ")
+
+        if not storage_response or not storage_response.full_path:
+            return jsonify({'message': 'Erro no upload do arquivo'}), 500
+
+
+        caminho_arquivo = f"materiais/arquivo/{filename}"
+        print(f"caminho_arquivo: {caminho_arquivo}")
+
+        # 🔹 Dados do material
+        print(f"request: {request.form}")
+        titulo = request.form.get('titulo')
+        descricao = request.form.get('descricao', '')
+        tipo_material = request.form.get('tipo_material', 'outro')
+
+        if not titulo:
+            return jsonify({'message': 'Título é obrigatório'}), 400
+        
+        auth_id = Get_auth_id(current_user_id)
+
+        # 🔹 Inserir registro na tabela materiais com auth_id (UUID)
+        print(f"current_user_id: {current_user_id},\nauth_id: {auth_id},\ntitulo: {titulo},\ndescricao: {descricao},\ntipo_material: {tipo_material},\ncaminho_arquivo: {caminho_arquivo}")
+        insert_resp = supabase.table("materiais").insert({
+            "id_usuario": current_user_id,  # <-- UUID do usuário
+            "auth_id": auth_id,
+            "titulo": titulo,
+            "descricao": descricao,
+            "tipo_material": tipo_material,
+            "caminho_arquivo": caminho_arquivo
+        }).execute()
+
+        if not insert_resp.data:
+            return jsonify({'message': 'Erro ao salvar registro no banco'}), 500
 
         return jsonify({'message': 'Material enviado com sucesso!'}), 201
 
-    finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+    except Exception as e:
+        print("ERRO SUPABASE →", str(e))
+        return jsonify({'message': 'Erro ao enviar material', 'error': str(e)}), 500
 
 @app.route('/materiais', methods=['GET'])
 @token_required
 def listar_materiais(current_user_id, current_user_role):
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT m.id_material, m.titulo, m.descricao, m.tipo_material, m.caminho_arquivo, u.nome_completo AS autor
-        FROM materiais m
-        JOIN usuarios u ON m.id_usuario = u.id_usuario
-        ORDER BY m.data_upload DESC
-    """)
-    materiais = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify({'materiais': materiais})
+    try:
+        response = supabase.table("materiais").select("""
+            id_material,
+            titulo,
+            descricao,
+            tipo_material,
+            caminho_arquivo,
+            usuarios:usuarios!fk_materiais_id_usuario(
+                nome_completo
+            )
+        """).order("data_upload", desc=True).execute()
+
+        materiais = []
+        for m in response.data:
+            usuario = m.get("usuarios")
+            autor = usuario.get("nome_completo") if usuario else None
+            materiais.append({
+                "id_material": m.get("id_material"),
+                "titulo": m.get("titulo"),
+                "descricao": m.get("descricao"),
+                "tipo_material": m.get("tipo_material"),
+                "caminho_arquivo": m.get("caminho_arquivo"),
+                "autor": autor
+            })
+
+        return jsonify({"materiais": materiais}), 200
+
+    except Exception as e:
+        print("ERRO SUPABASE →", str(e))
+        return jsonify({"message": "Erro ao listar materiais", "error": str(e)}), 500
 
 @app.route('/materiais/buscar', methods=['GET'])
 @token_required
@@ -827,38 +989,71 @@ def buscar_materiais(current_user_id, current_user_role):
     query = request.args.get('query', '').strip()
 
     try:
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
+        base_query = supabase.table("materiais").select("""
+            id_material,
+            titulo,
+            descricao,
+            tipo_material,
+            data_upload,
+            caminho_arquivo
+        """).order("data_upload", desc=True)
+        print(f"1 base_query: {base_query}")
 
         if query:
-            search_query = f"%{query}%"
-            cursor.execute("""
-                SELECT m.id_material, m.titulo, m.descricao, m.tipo_material, m.tipo AS assunto,
-                       m.caminho_arquivo, u.nome_completo AS autor
-                FROM materiais m
-                JOIN usuarios u ON m.id_usuario = u.id_usuario
-                WHERE m.titulo LIKE %s OR m.tipo LIKE %s
-                ORDER BY m.data_upload DESC
-            """, (search_query, search_query))
-        else:
-            cursor.execute("""
-                SELECT m.id_material, m.titulo, m.descricao, m.tipo_material, m.tipo AS assunto,
-                       m.caminho_arquivo, u.nome_completo AS autor
-                FROM materiais m
-                JOIN usuarios u ON m.id_usuario = u.id_usuario
-                ORDER BY m.data_upload DESC
-            """)
+            # Supabase usa ilike para case-insensitive LIKE
+            base_query = base_query.or_(f"titulo.ilike.%{query}%")
+            print(f"2 base_query: {base_query}")
 
-        materiais = cursor.fetchall()
-        return jsonify({'materiais': materiais})
+        response = base_query.execute()
+        print(f"response: {response}")
+        materiais = []
 
-    finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        for m in response.data:
+            autor = getnome(current_user_id)
+            print(f"autor: {autor}")
+            materiais.append({
+                "id_material": m.get("id_material"),
+                "titulo": m.get("titulo"),
+                "descricao": m.get("descricao"),
+                "tipo_material": m.get("tipo_material"),
+                "assunto": m.get("assunto"),
+                "caminho_arquivo": m.get("caminho_arquivo"),
+                "autor": autor
+            })
 
-@app.route('/uploads/<filename>')
-def serve_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+        return jsonify({"materiais": materiais}), 200
+
+    except Exception as e:
+        print("ERRO SUPABASE →", str(e))
+        return jsonify({"message": "Erro ao buscar materiais", "error": str(e)}), 500
+
+@app.route('/materiais/download/<path:filepath>', methods=['GET'])
+@token_required
+def download_material(current_user_id, current_user_role, filepath):
+    print("Solicitado download de:", filepath)
+
+    try:
+        # 🔹 remove prefixo caso venha como "materiais/..."
+        filepath = filepath.replace("materiais/", "")
+
+        # 🔹 baixa o binário do Supabase
+        file_bytes = supabase.storage.from_("materiais").download(filepath)
+
+        # 🔹 cria arquivo temporário de forma segura
+        temp = tempfile.NamedTemporaryFile(delete=False)
+        temp.write(file_bytes)
+        temp.close()
+
+        # 🔹 envia o arquivo ao navegador
+        return send_file(
+            temp.name,
+            as_attachment=True,
+            download_name=os.path.basename(filepath)
+        )
+
+    except Exception as e:
+        print("ERRO DOWNLOAD →", e)
+        return jsonify({"message": "Erro ao baixar material", "error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

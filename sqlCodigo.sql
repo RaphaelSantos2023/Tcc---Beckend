@@ -118,30 +118,25 @@ ALTER TABLE publicacoes_forum
 ADD COLUMN id_forum INT NOT NULL,
 ADD FOREIGN KEY (id_forum) REFERENCES foruns(id_forum) ON DELETE CASCADE;
 
--- Tabela de respostas às publicações
-CREATE TABLE respostas_forum (
-    id_resposta INT AUTO_INCREMENT PRIMARY KEY,
-    id_publicacao INT NOT NULL,
-    id_usuario INT NOT NULL,
-    conteudo TEXT NOT NULL,
-    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (id_publicacao) REFERENCES publicacoes_forum(id_publicacao) ON DELETE CASCADE,
-    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
-);
-
-
--- --
-
 CREATE TABLE cursos_extracurriculares (
-    id_cursos INT AUTO_INCREMENT PRIMARY KEY,
-    nome varchar(100) not null,
-    descricao varchar(100) not null,
-    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  id_cursos INT AUTO_INCREMENT PRIMARY KEY,
+  nome VARCHAR(100) NOT NULL,
+  descricao TEXT NOT NULL,
+  carga_horaria INT DEFAULT 0,
+  link_acesso VARCHAR(255),
+  criado_por INT,
+  FOREIGN KEY (criado_por) REFERENCES usuarios(id_usuario)
 );
 
-create Table Tema_tcc (
-	id_temas int auto_increment primary key,
-    nome varchar(100) not null
+
+CREATE TABLE tema_tcc (
+  id_tema INT AUTO_INCREMENT PRIMARY KEY,
+  titulo VARCHAR(255) NOT NULL,
+  descricao TEXT NOT NULL,
+  area_conhecimento VARCHAR(100),
+  data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  criado_por INT,
+  FOREIGN KEY (criado_por) REFERENCES usuarios(id_usuario)
 );
 
 create table tema_tcc_cursos(
@@ -152,14 +147,7 @@ create table tema_tcc_cursos(
     FOREIGN KEY (id_cursos) REFERENCES cursos_extracurriculares(id_cursos)
 );
 
-create table Curso_Usuario(
-	id_curso_unifan int primary key auto_increment,
-    id_usuario int not null,
-    id_cursos int not null,
-    porcentagem_completada int not null,
-    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
-    FOREIGN KEY (id_cursos) REFERENCES cursos_extracurriculares(id_cursos)
-);
+
 
 CREATE TABLE materiais (
     id_material INT AUTO_INCREMENT PRIMARY KEY,
