@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import LoginForm from './LoginForm';
 import RegisterForm from './RegisterForm';
 import Forum from './Forum';
@@ -18,6 +18,9 @@ function App() {
   const isLoggedIn = !!localStorage.getItem('token');
   const tipoUsuario = localStorage.getItem('tipo_usuario');
 
+  useEffect(()=>{
+    console.log(tipoUsuario)
+  });
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '1rem' }}>
       {isLoggedIn ? (
@@ -35,7 +38,7 @@ function App() {
           {(tipoUsuario === 'aluno' || tipoUsuario === 'professor') && <PerfilAcademico />}
 
           {/* 🧑‍🤝‍🧑 Nova seção para Parceiro */}
-          {(tipoUsuario === 'parceiro') && <Parceiro /> }
+          {(tipoUsuario === 'admin') && <Parceiro /> }
           
           <NovoForum />
           <Forum />
@@ -44,14 +47,17 @@ function App() {
           <CursosList />
           {tipoUsuario && tipoUsuario !== 'aluno' && <GerenciarCursos />}
 
+          {/* 👇 Adiciona a listagem de recomendações */}
+          {tipoUsuario && tipoUsuario !== 'aluno' && <UploadMaterial />}
+          
+          <MateriaisList />
+
           <GeminiChat />
 
           <RecomendacoesList />
 
           
-          {/* 👇 Adiciona a listagem de recomendações */}
-          {tipoUsuario && tipoUsuario !== 'aluno' && <UploadMaterial />}
-          <MateriaisList />
+          
           
         </>
       ) : (

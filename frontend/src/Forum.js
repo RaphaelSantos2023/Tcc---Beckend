@@ -22,7 +22,7 @@ function Forum() {
           setForumSelecionado(data.foruns[0].id_forum); // seleciona o primeiro por padrão
         }
       } else {
-        setMsg(data.message || 'Erro ao carregar fóruns');
+        setMsg(data.message || '');
       }
     };
 

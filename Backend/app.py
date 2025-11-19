@@ -33,9 +33,6 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def Get_Usuario(id):
-        return supabase.table("usuarios").select("*").eq("auth_id",id).execute()
-
 def Get_auth_id(id):
         resp =  supabase.table("usuarios").select("auth_id").eq("id_usuario",id).execute()
         return resp.data[0].get("auth_id")
@@ -55,6 +52,7 @@ def token_required(f):
                 token = parts[1]
 
         if not token:
+            print("Token faltando")
             return jsonify({"message": "Token está faltando!"}), 401
 
         try:
@@ -72,8 +70,8 @@ def token_required(f):
                 .execute()
 
             if not usuario_resp.data:
+                print("usuario não encontrado")
                 return jsonify({"message": "Usuário não encontrado!"}), 401
-
             current_user_id = usuario_resp.data[0]["id_usuario"]
             current_user_role = usuario_resp.data[0]["tipo_usuario"]
 
@@ -299,8 +297,6 @@ def criar_tema(current_user_id, current_user_role):
 
     except Exception as e:
         return jsonify({"message": "Erro no servidor", "error": str(e)}), 500
-    
-
 
 @app.route('/temas/<int:id_tema>', methods=['DELETE'])
 @token_required
@@ -443,6 +439,8 @@ def cadastrar_parceiro():
     genero = data.get('genero')
     auth_id = data.get('auth_id') # Se estiver usando Supabase Auth (opcional)
 
+    
+
     # 2. Coletar dados específicos do parceiro (tabela 'parceiros')
     tipo_parceiro = data.get('tipo_parceiro') # 'faculdade' ou 'empresa'
     nome_fantasia = data.get('nome_fantasia')
@@ -493,7 +491,22 @@ def cadastrar_parceiro():
         }
         
         supabase.table("parceiros").insert(parceiro_data).execute()
-
+        endereco = data.get("endereco")
+        if endereco:
+            print("antes de endereco")
+            supabase.table("enderecos").insert({
+                "id_usuario": id_usuario,
+                "cep": endereco.get("cep"),
+                "logradouro": endereco.get("logradouro"),
+                "numero": endereco.get("numero"),
+                "complemento": endereco.get("complemento"),
+                "bairro": endereco.get("bairro"),
+                "cidade": endereco.get("cidade"),
+                "estado": endereco.get("estado"),
+                "pais": endereco.get("pais", "Brasil"),
+                "tipo_endereco": endereco.get("tipo_endereco", "residencial")
+            }).execute()
+        
         return jsonify({
             "message": "Parceiro cadastrado com sucesso!",
             "id_usuario": id_usuario,
@@ -961,7 +974,7 @@ def upload_material(current_user_id, current_user_role):
         # 🔹 Upload para Supabase Storage (pasta 'materiais')
         file_bytes = file.read()  # lê os bytes do arquivo
         storage_response = supabase.storage.from_('materiais').upload(
-            f"{current_user_id}/{filename}",
+            f"arquivo/{filename}",
             file_bytes
         )
 
@@ -990,7 +1003,7 @@ def upload_material(current_user_id, current_user_role):
             "tipo_material": tipo_material,
             "caminho_arquivo": caminho_arquivo
         }).execute()
-
+        print(f"caminho_arquivo: {caminho_arquivo}")
         if not insert_resp.data:
             return jsonify({'message': 'Erro ao salvar registro no banco'}), 500
 
