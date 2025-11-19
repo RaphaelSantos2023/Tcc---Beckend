@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import os
 import tempfile
 from flask_bcrypt import Bcrypt
+from jwt import decode, InvalidTokenError
 from supabase import create_client, Client
 from google import genai
 load_dotenv()
@@ -33,26 +34,21 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def Get_Usuario(id):
-        print("aqui")
-        print(id)
         return supabase.table("usuarios").select("*").eq("auth_id",id).execute()
 
 def Get_auth_id(id):
         resp =  supabase.table("usuarios").select("auth_id").eq("id_usuario",id).execute()
-        print(f"resp.data[0][auth_id]: {resp.data[0]["auth_id"]}")
         return resp.data[0].get("auth_id")
 
 def getnome(id):
         resp =  supabase.table("usuarios").select("nome_completo").eq("id_usuario",id).execute()
-        print(f"resp.data[0][nome_completo]: {resp.data[0]["nome_completo"]}")
         return resp.data[0]["nome_completo"]
 
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-
-        # PEGAR TOKEN
         token = None
+        
         if "Authorization" in request.headers:
             parts = request.headers["Authorization"].split()
             if len(parts) == 2 and parts[0] == "Bearer":
@@ -62,15 +58,13 @@ def token_required(f):
             return jsonify({"message": "Token está faltando!"}), 401
 
         try:
-            # VALIDAR TOKEN NO SUPABASE
-            user = supabase.auth.get_user(token)
+            # 🔥 decodifica localmente (sem chamar Supabase)
+            payload = decode(token, options={"verify_signature": False})
+            auth_id = payload.get("sub")
 
-            if not user or not user.user:
+            if not auth_id:
                 return jsonify({"message": "Token inválido!"}), 401
 
-            auth_id = user.user.id   # UUID do Supabase Auth
-
-            # Buscar usuário na sua tabela
             usuario_resp = supabase.table("usuarios") \
                 .select("id_usuario, tipo_usuario") \
                 .eq("auth_id", auth_id) \
@@ -78,7 +72,7 @@ def token_required(f):
                 .execute()
 
             if not usuario_resp.data:
-                return jsonify({"message": "Usuário sem registro no banco!"}), 401
+                return jsonify({"message": "Usuário não encontrado!"}), 401
 
             current_user_id = usuario_resp.data[0]["id_usuario"]
             current_user_role = usuario_resp.data[0]["tipo_usuario"]
@@ -108,6 +102,8 @@ def roles_required(*roles_permitidos):
 @token_required
 def listar_cursos(current_user_id, current_user_role):
     """Lista todos os cursos disponíveis (todos podem ver)."""
+    print("User ID:", current_user_id)
+    print("User Role:", current_user_role)
 
     try:
         response = supabase.table("cursos_extracurriculares") \
@@ -134,24 +130,25 @@ def criar_curso(current_user_id, current_user_role):
     carga_horaria = data.get('carga_horaria', 0)
     link_acesso = data.get('link_acesso')
 
-    if not nome or not descricao:
+    if not nome or not descricao or not link_acesso or not carga_horaria :
         return jsonify({"message": "Nome e descrição são obrigatórios!"}), 400
-
+    print(f"current_user_id: {current_user_id}")
     try:
         response = supabase.table("cursos_extracurriculares").insert({
             "nome": nome,
             "descricao": descricao,
             "carga_horaria": carga_horaria,
             "link_acesso": link_acesso,
-            "criado_por": current_user_id   # 🔥 IMPORTANTE!
+            "criado_por": current_user_id
         }).execute()
-
+        print("tudo certo")
         return jsonify({
             "message": "Curso criado com sucesso!",
             "curso": response.data  # Já retorna o registro inserido
         }), 201
 
     except Exception as e:
+        print(f"Erro na criação de curso: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/cursos/<int:id_curso>', methods=['PUT'])
@@ -220,7 +217,6 @@ def deletar_curso(current_user_id, current_user_role, id_curso):
 @roles_required('aluno')
 def inscrever_curso(current_user_id, current_user_role):
     """Inscrição em curso — apenas alunos podem."""
-    id_usado = current_user_id
     data = request.get_json()
     id_curso = data.get("id_curso")
 
@@ -255,16 +251,15 @@ def listar_temas(current_user_id, current_user_role):
             .select("*") \
             .order("data_criacao", desc=True) \
             .execute()
-        print(f"response: {response.data}")
 
         temas = []
 
         for row in response.data:
             nome_criador = getnome(row['criado_por'])
-            print(f"nome_criador: {nome_criador}")
             temas.append({
                 "id_tema": row["id_tema"],
                 "titulo": row["titulo"],
+                "descricao": row["descricao"],
                 "area_conhecimento": row["area_conhecimento"],
                 "data_criacao": row["data_criacao"],
                 "criado_por": nome_criador
@@ -273,7 +268,6 @@ def listar_temas(current_user_id, current_user_role):
         return jsonify({"temas": temas})
 
     except Exception as e:
-        print(f"> erro na listagem de temas: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -283,7 +277,6 @@ def listar_temas(current_user_id, current_user_role):
 def criar_tema(current_user_id, current_user_role):
     """Professores, parceiros e admins podem propor temas de TCC."""
     data = request.get_json()
-    print(f"data: {data}")
     nome = data.get('titulo')  # ainda vem como titulo do front
     descricao = data.get('descricao')
     area_conhecimento = data.get('area_conhecimento')
@@ -305,7 +298,6 @@ def criar_tema(current_user_id, current_user_role):
         return jsonify({"message": "Tema de TCC criado com sucesso!"}), 201
 
     except Exception as e:
-        print(f"> Erro na postagem de tema: {str(e)}")
         return jsonify({"message": "Erro no servidor", "error": str(e)}), 500
     
 
@@ -344,8 +336,6 @@ def register():
     required_fields = ['email', 'senha', 'nome_completo', 'tipo_usuario']
     if any(field not in data for field in required_fields):
         return jsonify({'message': 'Campos obrigatórios faltando'}), 400
-
-    print(data)
 
     email = data['email']
     senha = data['senha']
@@ -409,7 +399,10 @@ def register():
         # ===== 6️⃣ ENDEREÇO =====
         endereco = data.get("endereco")
         if endereco:
+            usuario_id = resp.data[0]['id']
+            print("antes de endereco")
             supabase.table("enderecos").insert({
+                "id_usuario": usuario_id,
                 "cep": endereco.get("cep"),
                 "logradouro": endereco.get("logradouro"),
                 "numero": endereco.get("numero"),
@@ -420,6 +413,7 @@ def register():
                 "pais": endereco.get("pais", "Brasil"),
                 "tipo_endereco": endereco.get("tipo_endereco", "residencial")
             }).execute()
+            print("antes de endereco 60911cf6-ddd8-49f3-90bc-40b24180da0d")
 
         return jsonify({"message": "Usuário registrado com sucesso"}), 201
 
@@ -566,10 +560,8 @@ def get_perfil(current_user_id, current_user_role):
 @app.route('/gemini/query', methods=['POST'])
 @token_required
 def gemini_query(current_user_id, current_user_role):
-    print(f"current_user_id: {current_user_id}")
 
     id_usado = current_user_id
-    print(id_usado)
     data = request.get_json()
     prompt = data.get("prompt")
 
@@ -602,16 +594,12 @@ def gemini_query(current_user_id, current_user_role):
         {contexto_extra}
         Gere uma resposta personalizada, útil e voltada à trajetória acadêmica e profissional do usuário.
         """
-        print(f"prompt_final: {prompt_final}")
         # 🔹 Gera resposta com Gemini
         response = cliente.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt_final
         )
-        print(f"response: {response}")
         resposta_texto = response.text.strip()
-
-        print(f"resposta_texto: {resposta_texto}")
 
         # 🔹 Salva recomendação no SUPABASE
         insert_resp = (
@@ -626,9 +614,6 @@ def gemini_query(current_user_id, current_user_role):
 
         if not insert_resp.data:
             return jsonify({"error": "Falha ao inserir recomendação no banco!"}), 404
-
-    
-        print(f"id_recomendacao: {insert_resp.data[0]["id_recomendacao"]}, prompt: {prompt},resposta: {resposta_texto}, contexto_usado: {perfil}")
         
         return jsonify({
             "id_recomendacao": insert_resp.data[0]["id_recomendacao"],  # se sua tabela usa id SERIAL
@@ -646,7 +631,6 @@ def gemini_query(current_user_id, current_user_role):
 @token_required
 def avaliar_recomendacao(current_user_id, current_user_role, id_recomendacao):
     data = request.get_json()
-    print(f"data: {data}")
     nota = data.get('nota')
     comentario = data.get('comentario')
 
@@ -726,8 +710,6 @@ def login():
 
         if not resp.user:
             return jsonify({'message': 'Usuário ou senha incorretos'}), 401
-
-        print(resp.user)
         
         user_id = resp.user.id     # ID AUTÊNTICO DO SUPABASE
         token_supabase = resp.session.access_token  # Token JWT gerado pelo Supabase
@@ -853,9 +835,7 @@ def criar_forum(current_user_id, current_user_role):
         }).execute()
 
         # Se quiser retornar o ID criado
-        print(f"response.data[0][id_forum]: {response.data[0]["id_forum"]}")
         forum_id = response.data[0]["id_forum"] if response.data else None
-        print(f"forum_id: {forum_id}")
 
         return jsonify({
             "message": "Fórum criado com sucesso!",
@@ -869,7 +849,6 @@ def criar_forum(current_user_id, current_user_role):
 @app.route('/forum', methods=['GET'])
 @token_required
 def listar_foruns(current_user_id, current_user_role):
-    print("Forum: listagem")
     
     try:
         response = supabase.table("foruns").select("""
@@ -880,12 +859,9 @@ def listar_foruns(current_user_id, current_user_role):
             criado_por
         """).order("data_criacao", desc=True).execute()
 
-        print(f"response lista forum:{response}")
-
         foruns = []
         for f in response.data:
             criador_nome = getnome(f.get("criado_por"))
-            print(criador_nome)
             foruns.append({
                 "id_forum": f.get("id_forum"),
                 "nome": f.get("nome"),
@@ -893,7 +869,6 @@ def listar_foruns(current_user_id, current_user_role):
                 "data_criacao": f.get("data_criacao"),
                 "criador": criador_nome
             })
-        print(f"Foruns: {foruns}")
 
         return jsonify({"foruns": foruns}), 200
 
@@ -975,7 +950,6 @@ def upload_material(current_user_id, current_user_role):
         return jsonify({'message': 'Nenhum arquivo enviado'}), 400
 
     file = request.files['arquivo']
-    print(f"file: {file}")
     if file.filename == '':
         return jsonify({'message': 'Nenhum arquivo selecionado'}), 400
 
@@ -983,7 +957,6 @@ def upload_material(current_user_id, current_user_role):
         return jsonify({'message': 'Tipo de arquivo não permitido'}), 400
 
     filename = secure_filename(file.filename)
-    print(f"filename: {filename}")
     try:
         # 🔹 Upload para Supabase Storage (pasta 'materiais')
         file_bytes = file.read()  # lê os bytes do arquivo
@@ -991,17 +964,14 @@ def upload_material(current_user_id, current_user_role):
             f"{current_user_id}/{filename}",
             file_bytes
         )
-        print(f"storage_response: ")
 
         if not storage_response or not storage_response.full_path:
             return jsonify({'message': 'Erro no upload do arquivo'}), 500
 
 
         caminho_arquivo = f"materiais/arquivo/{filename}"
-        print(f"caminho_arquivo: {caminho_arquivo}")
 
         # 🔹 Dados do material
-        print(f"request: {request.form}")
         titulo = request.form.get('titulo')
         descricao = request.form.get('descricao', '')
         tipo_material = request.form.get('tipo_material', 'outro')
@@ -1012,7 +982,6 @@ def upload_material(current_user_id, current_user_role):
         auth_id = Get_auth_id(current_user_id)
 
         # 🔹 Inserir registro na tabela materiais com auth_id (UUID)
-        print(f"current_user_id: {current_user_id},\nauth_id: {auth_id},\ntitulo: {titulo},\ndescricao: {descricao},\ntipo_material: {tipo_material},\ncaminho_arquivo: {caminho_arquivo}")
         insert_resp = supabase.table("materiais").insert({
             "id_usuario": current_user_id,  # <-- UUID do usuário
             "auth_id": auth_id,
@@ -1083,20 +1052,16 @@ def buscar_materiais(current_user_id, current_user_role):
             data_upload,
             caminho_arquivo
         """).order("data_upload", desc=True)
-        print(f"1 base_query: {base_query}")
 
         if query:
             # Supabase usa ilike para case-insensitive LIKE
             base_query = base_query.or_(f"titulo.ilike.%{query}%")
-            print(f"2 base_query: {base_query}")
 
         response = base_query.execute()
-        print(f"response: {response}")
         materiais = []
 
         for m in response.data:
             autor = getnome(current_user_id)
-            print(f"autor: {autor}")
             materiais.append({
                 "id_material": m.get("id_material"),
                 "titulo": m.get("titulo"),
@@ -1116,7 +1081,6 @@ def buscar_materiais(current_user_id, current_user_role):
 @app.route('/materiais/download/<path:filepath>', methods=['GET'])
 @token_required
 def download_material(current_user_id, current_user_role, filepath):
-    print("Solicitado download de:", filepath)
 
     try:
         # 🔹 remove prefixo caso venha como "materiais/..."

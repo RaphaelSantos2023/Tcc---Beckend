@@ -11,17 +11,30 @@ function TemasTCC() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => res.json())
-      .then((data) => setTemas(data.temas || []));
+      .then((data) => {
+        console.log("🔎 Dados recebidos do servidor /temas:", data); // ← LOG AQUI
+        setTemas(data.temas || []);
+      })
+      .catch((err) => console.error("❌ Erro ao buscar temas:", err));
+      
   }, [token]);
 
   const criarTema = async () => {
-    await fetch('http://localhost:5000/temas/criar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(form),
-    });
-    setForm({ titulo: '', descricao: '', area_conhecimento: '' });
-    window.location.reload();
+    try {
+      const res = await fetch('http://localhost:5000/temas/criar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(form),
+      });
+
+      const data = await res.json();
+      console.log("🟢 Resposta ao criar tema:", data); // ← LOG DA CRIAÇÃO
+
+      setForm({ titulo: '', descricao: '', area_conhecimento: '' });
+      window.location.reload();
+    } catch (error) {
+      console.error("❌ Erro ao criar tema:", error);
+    }
   };
 
   return (

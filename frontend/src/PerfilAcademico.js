@@ -8,6 +8,7 @@ function PerfilAcademico() {
     habilidades: "",
     objetivo_carreira: ""
   });
+  const [msg, setMsg] = useState('');
 
   const token = localStorage.getItem("token");
 
@@ -41,6 +42,13 @@ function PerfilAcademico() {
     });
 
     const data = await res.json();
+    setPerfil({
+            periodo_atual: "",
+            ira_geral: "",
+            interesses_principais: "",
+            habilidades: "",
+            objetivo_carreira: ""
+        });
     alert(data.message || "Perfil salvo!");
   };
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 
 function CursosList() {
   const [cursos, setCursos] = useState([]);
+  const [reload, setReload] = useState(false);
   const [mensagem, setMensagem] = useState('');
   const token = localStorage.getItem('token');
   const tipoUsuario = localStorage.getItem('tipo_usuario');
@@ -10,27 +11,17 @@ function CursosList() {
     fetch('http://localhost:5000/cursos', {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => res.json())
-      .then((data) => setCursos(data.cursos || []))
-      .catch((err) => console.error(err));
-  }, [token]);
+      .then((res) => {
+        console.log("📥 [GET /cursos] Status:", res.status);
+        return res.json();
+      })
+      .then((data) => {
+        console.log("📦 Dados recebidos de /cursos:", data);
+        setCursos(data.cursos || []);
+      })
+      .catch((err) => console.error("❌ Erro ao buscar cursos:", err));
+  }, [token, reload]);   // recarrega sempre que reload mudar
 
-  const inscrever = async (id_curso) => {
-    try {
-      const res = await fetch('http://localhost:5000/cursos/inscrever', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ id_curso }),
-      });
-      const data = await res.json();
-      setMensagem(data.message || 'Erro ao se inscrever');
-    } catch (error) {
-      setMensagem('Erro ao se inscrever');
-    }
-  };
 
   return (
     <div>
@@ -49,14 +40,6 @@ function CursosList() {
                 <a href={curso.link_acesso} target="_blank" rel="noreferrer">
                   Acessar
                 </a>
-              )}
-              {tipoUsuario === 'aluno' && (
-                <button
-                  onClick={() => inscrever(curso.id_cursos)}
-                  style={{ marginTop: '5px', display: 'block' }}
-                >
-                  Inscrever-se
-                </button>
               )}
             </li>
           ))}

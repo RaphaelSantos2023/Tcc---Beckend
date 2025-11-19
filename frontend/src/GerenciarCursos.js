@@ -4,13 +4,18 @@ function GerenciarCursos() {
   const [cursos, setCursos] = useState([]);
   const [form, setForm] = useState({ nome: '', descricao: '', carga_horaria: '', link_acesso: '' });
   const token = localStorage.getItem('token');
+  const [msg, setMsg] = useState('');
 
   const carregarCursos = () => {
     fetch('http://localhost:5000/cursos', {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => res.json())
-      .then((data) => setCursos(data.cursos || []));
+      .then((data) => {
+        console.log("📥 Dados recebidos do servidor (GET /cursos):", data); // LOG AQUI
+        setCursos(data.cursos || []);
+      })
+      .catch((err) => console.error("❌ Erro ao carregar cursos:", err));
   };
 
   useEffect(() => {
@@ -18,21 +23,38 @@ function GerenciarCursos() {
   }, []);
 
   const criarCurso = async () => {
-    await fetch('http://localhost:5000/cursos/criar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(form),
-    });
-    setForm({ nome: '', descricao: '', carga_horaria: '', link_acesso: '' });
-    carregarCursos();
+    try {
+      const res = await fetch('http://localhost:5000/cursos/criar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(form),
+      });
+
+      const data = await res.json();
+      console.log("🟢 Resposta do servidor (POST /cursos/criar):", data); // LOG AQUI
+
+      setForm({ nome: '', descricao: '', carga_horaria: '', link_acesso: '' });
+      setMsg(data.message || 'Erro no cadastro');
+      carregarCursos();
+    } catch (error) {
+      console.error("❌ Erro ao criar curso:", error);
+    }
   };
 
   const deletarCurso = async (id) => {
-    await fetch(`http://localhost:5000/cursos/${id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    carregarCursos();
+    try {
+      const res = await fetch(`http://localhost:5000/cursos/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const data = await res.json();
+      console.log(`🗑️ Resposta do servidor (DELETE /cursos/${id}):`, data); // LOG AQUI
+
+      carregarCursos();
+    } catch (error) {
+      console.error("❌ Erro ao deletar curso:", error);
+    }
   };
 
   return (
@@ -59,6 +81,7 @@ function GerenciarCursos() {
         onChange={(e) => setForm({ ...form, link_acesso: e.target.value })}
       />
       <button onClick={criarCurso}>Criar Curso</button>
+      <p>{msg}</p>
 
       <ul>
         {cursos.map((curso) => (

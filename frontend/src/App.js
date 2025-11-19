@@ -35,7 +35,8 @@ function App() {
           {(tipoUsuario === 'aluno' || tipoUsuario === 'professor') && <PerfilAcademico />}
 
           {/* 🧑‍🤝‍🧑 Nova seção para Parceiro */}
-          <Parceiro />
+          {(tipoUsuario === 'parceiro') && <Parceiro /> }
+          
           <NovoForum />
           <Forum />
           
