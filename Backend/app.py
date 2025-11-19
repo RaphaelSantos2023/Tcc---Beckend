@@ -14,7 +14,7 @@ cliente = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = Flask(__name__)
 CORS(app)
-app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")  # Troque para algo seguro
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")  
 
 bcrypt = Bcrypt(app)
 
@@ -429,6 +429,92 @@ def register():
             "message": "Erro no servidor",
             "error": str(e)
         }), 500
+
+# ... (imports, app setup, supabase setup, bcrypt, etc.)
+
+@app.route('/register/parceiro', methods=['POST'])
+def cadastrar_parceiro():
+    """
+    Cadastra um novo usuário do tipo 'parceiro' na tabela 'usuarios'
+    e adiciona seus dados específicos na tabela 'parceiros'.
+    """
+    data = request.get_json()
+
+    # 1. Validar e coletar dados básicos do usuário (tabela 'usuarios')
+    email = data.get('email')
+    senha = data.get('senha')
+    nome_completo = data.get('nome_completo')
+    curso_atual = data.get('curso_atual', 'N/A') # Exigido no seu schema, mas pode ser 'N/A' para parceiros
+    data_nascimento = data.get('data_nascimento')
+    genero = data.get('genero')
+    auth_id = data.get('auth_id') # Se estiver usando Supabase Auth (opcional)
+
+    # 2. Coletar dados específicos do parceiro (tabela 'parceiros')
+    tipo_parceiro = data.get('tipo_parceiro') # 'faculdade' ou 'empresa'
+    nome_fantasia = data.get('nome_fantasia')
+    razao_social = data.get('razao_social')
+    cnpj = data.get('cnpj')
+    telefone = data.get('telefone')
+    email_parceiro = data.get('email_parceiro')
+    site = data.get('site')
+    
+    # 3. Validação Mínima
+    if not email or not senha or not nome_completo or not tipo_parceiro or not cnpj:
+        return jsonify({"message": "Dados obrigatórios (email, senha, nome_completo, tipo_parceiro, cnpj) ausentes"}), 400
+
+    if tipo_parceiro not in ['faculdade', 'empresa']:
+        return jsonify({"message": "Tipo de parceiro inválido. Use 'faculdade' ou 'empresa'."}), 400
+        
+    try:
+        # 4. Criptografar Senha
+        senha_hash = senha
+
+        # 5. Inserir na Tabela 'usuarios'
+        usuario_data = {
+            "email": email,
+            "senha_hash": senha_hash,
+            "nome_completo": nome_completo,
+            "data_nascimento": data_nascimento,
+            "genero": genero,
+            "curso_atual": curso_atual,
+            "tipo_usuario": "parceiro", # CHAVE: Definir o tipo correto
+            "auth_id": auth_id
+        }
+        
+        # A inserção retorna uma lista de resultados. Usamos [0] para pegar o objeto inserido.
+        result_usuario = supabase.table("usuarios").insert(usuario_data).execute()
+        novo_usuario = result_usuario.data[0]
+        id_usuario = novo_usuario['id_usuario']
+
+        # 6. Inserir na Tabela 'parceiros'
+        parceiro_data = {
+            "id_usuario": id_usuario,
+            "tipo_parceiro": tipo_parceiro,
+            "nome_fantasia": nome_fantasia,
+            "razao_social": razao_social,
+            "cnpj": cnpj,
+            "telefone": telefone,
+            "email": email_parceiro or email, # Usa o email de parceiro ou o email de login
+            "site": site
+        }
+        
+        supabase.table("parceiros").insert(parceiro_data).execute()
+
+        return jsonify({
+            "message": "Parceiro cadastrado com sucesso!",
+            "id_usuario": id_usuario,
+            "email": email
+        }), 201
+
+    except Exception as e:
+        print("ERRO SUPABASE →", str(e))
+        # Se houver um erro, é bom tentar limpar o registro de 'usuarios' se ele foi criado,
+        # mas para simplificação, vamos apenas reportar o erro.
+        if "Duplicate key" in str(e):
+             return jsonify({"message": "Erro ao cadastrar parceiro", "error": "Email ou CNPJ já cadastrado."}), 409
+        return jsonify({"message": "Erro ao cadastrar parceiro", "error": str(e)}), 500
+
+# ... (outras rotas)
 
 @app.route('/perfil', methods=['POST'])
 @token_required

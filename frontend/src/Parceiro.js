@@ -72,7 +72,7 @@ function Parceiro() {
   }
 
   try {
-    const res = await fetch('http://localhost:5000/parceiros/adicionar', {
+    const res = await fetch('http://localhost:5000/register/parceiro', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -89,7 +89,7 @@ function Parceiro() {
         senha: '',
         nome_completo: '',
         curso_atual: '',
-        tipo_usuario: 'aluno',
+        tipo_usuario: 'parceiro',
         data_nascimento: '',
         genero: '',
         tipo_parceiro: '',
