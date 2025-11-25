@@ -1,6 +1,9 @@
 flask
-flask_sqlalchemy
-flask_jwt_extended
-passlib[bcrypt]
-mysql-connector-python
+flask-cors
+flask-bcrypt
+python-dotenv
+gunicorn
 supabase
+PyJWT
+google-genai
+werkzeug

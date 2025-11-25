@@ -1117,6 +1117,3 @@ def download_material(current_user_id, current_user_role, filepath):
     except Exception as e:
         print("ERRO DOWNLOAD →", e)
         return jsonify({"message": "Erro ao baixar material", "error": str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True)
